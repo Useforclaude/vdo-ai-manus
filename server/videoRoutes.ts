@@ -1,7 +1,8 @@
 import express, { type Express } from "express";
 import path from "path";
+import { Readable } from "node:stream";
 import * as db from "./db";
-import { storagePut } from "./storage";
+import { storageGetSignedUrl, storagePut } from "./storage";
 import { MAX_SOURCE_BYTES, processVideoJob } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 
@@ -19,6 +20,21 @@ function appearsToBeVideo(data: Buffer) {
   const avi = fourCc === "RIFF" && data.length >= 12 && data.subarray(8, 12).toString("ascii") === "AVI ";
   const transportStream = data[0] === 0x47;
   return ftyp || webm || ogg || avi || transportStream;
+}
+
+type CompletedJobOutput = {
+  id: string;
+  processedStorageKey?: string | null;
+  subtitleStorageKey?: string | null;
+};
+
+export function getDownloadAsset(job: CompletedJobOutput, asset: "video" | "subtitle") {
+  if (asset === "subtitle") {
+    if (!job.subtitleStorageKey) return null;
+    return { storageKey: job.subtitleStorageKey, fileName: `cineflow-subtitles-${job.id}.srt`, contentType: "application/x-subrip" };
+  }
+  if (!job.processedStorageKey) return null;
+  return { storageKey: job.processedStorageKey, fileName: `cineflow-edit-${job.id}.mp4`, contentType: "video/mp4" };
 }
 
 export function registerVideoRoutes(app: Express) {
@@ -60,6 +76,39 @@ export function registerVideoRoutes(app: Express) {
     } catch (error) {
       console.error("[Video] Processing failed", error);
       return res.status(500).json({ error: error instanceof Error ? error.message : "Video processing failed" });
+    }
+  });
+
+  app.get("/api/video-jobs/:jobId/download", async (req, res) => {
+    try {
+      const actor = await resolveVideoActor(req, res);
+      if (!/^job_[a-zA-Z0-9_-]{8,64}$/.test(req.params.jobId)) return res.status(400).json({ error: "Invalid editing job" });
+      const requestedAsset = req.query.asset ?? "video";
+      if (requestedAsset !== "video" && requestedAsset !== "subtitle") return res.status(400).json({ error: "Invalid download asset" });
+
+      const job = await db.getEditJobForUser(req.params.jobId, actor.userId);
+      if (!job) return res.status(404).json({ error: "Editing job was not found" });
+      const output = getDownloadAsset(job, requestedAsset);
+      if (!output) return res.status(404).json({ error: "Requested output is not available" });
+
+      const signedUrl = await storageGetSignedUrl(output.storageKey);
+      const upstream = await fetch(signedUrl);
+      if (!upstream.ok || !upstream.body) throw new Error("Unable to retrieve processed output from storage");
+
+      const contentLength = upstream.headers.get("content-length");
+      res.status(200);
+      res.setHeader("Content-Type", output.contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${output.fileName}"`);
+      res.setHeader("Cache-Control", "private, no-store");
+      if (contentLength) res.setHeader("Content-Length", contentLength);
+      Readable.fromWeb(upstream.body as Parameters<typeof Readable.fromWeb>[0]).on("error", error => {
+        console.error("[Video] Download stream failed", error);
+        if (!res.headersSent) res.status(502).json({ error: "Unable to stream processed output" });
+        else res.destroy(error);
+      }).pipe(res);
+    } catch (error) {
+      console.error("[Video] Download failed", error);
+      if (!res.headersSent) return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to download processed output" });
     }
   });
 }

@@ -14,7 +14,12 @@ export type VideoActor = {
 };
 
 export async function resolveVideoActor(req: Request, res: Response, authenticatedUser?: { id: number } | null): Promise<VideoActor> {
-  if (authenticatedUser) return { userId: authenticatedUser.id, isGuest: false };
+  // Cineflow is intentionally a guest-first tool. The browser may still carry
+  // a preview or Manus session token, so video requests explicitly opt into
+  // their own cookie-scoped actor to keep upload, job creation, and processing
+  // within one browser session.
+  const forceGuest = req.get("x-cineflow-guest") === "1";
+  if (authenticatedUser && !forceGuest) return { userId: authenticatedUser.id, isGuest: false };
 
   const cookies = parse(req.headers.cookie ?? "");
   let guestToken = cookies[GUEST_COOKIE_NAME];

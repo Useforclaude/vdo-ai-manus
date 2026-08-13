@@ -50,6 +50,18 @@ describe("interpretVideoCommand", () => {
     });
     expect(llm.invokeLLM).toHaveBeenCalledWith(expect.not.objectContaining({ response_format: expect.anything() }));
   });
+
+  it("uses the deterministic fallback when an LLM provider response has no choices array", async () => {
+    llm.invokeLLM.mockResolvedValue({ id: "malformed-response", choices: undefined });
+
+    const plan = await interpretVideoCommand("สร้างซับไตเติลและ crop 16:9");
+
+    expect(plan.sourceLanguage).toBe("mixed");
+    expect(plan.operations).toEqual([
+      { type: "generate_subtitles" },
+      { type: "crop_16_9" },
+    ]);
+  });
 });
 
 describe("createSrt", () => {

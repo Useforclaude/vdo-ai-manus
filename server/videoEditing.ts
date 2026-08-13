@@ -79,7 +79,9 @@ export async function interpretVideoCommand(command: string): Promise<EditPlan> 
         { role: "user", content: command },
       ],
     });
-    const content = response.choices[0]?.message?.content;
+    const content = Array.isArray(response?.choices)
+      ? response.choices[0]?.message?.content
+      : undefined;
     if (typeof content !== "string") return fallback;
     const parsed = parsePlanContent(content);
     return validatePlan(parsed, fallback);

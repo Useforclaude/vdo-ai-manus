@@ -4,14 +4,15 @@ const mocks = vi.hoisted(() => ({
   getEditJobForUser: vi.fn(),
   processVideoJob: vi.fn(),
   resolveVideoActor: vi.fn(),
+  storageGetSignedUrl: vi.fn(),
 }));
 
 vi.mock("./db", () => ({ getEditJobForUser: mocks.getEditJobForUser }));
 vi.mock("./videoEditing", () => ({ MAX_SOURCE_BYTES: 180 * 1024 * 1024, processVideoJob: mocks.processVideoJob }));
-vi.mock("./storage", () => ({ storagePut: vi.fn() }));
+vi.mock("./storage", () => ({ storagePut: vi.fn(), storageGetSignedUrl: mocks.storageGetSignedUrl }));
 vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
 
-import { registerVideoRoutes } from "./videoRoutes";
+import { getDownloadAsset, registerVideoRoutes } from "./videoRoutes";
 
 type RegisteredRoute = { path: string; handlers: Array<(req: any, res: any) => Promise<unknown> | unknown> };
 
@@ -19,6 +20,7 @@ function routeRegistry() {
   const routes: RegisteredRoute[] = [];
   const app = {
     post: (path: string, ...handlers: RegisteredRoute["handlers"]) => routes.push({ path, handlers }),
+    get: (path: string, ...handlers: RegisteredRoute["handlers"]) => routes.push({ path, handlers }),
   };
   registerVideoRoutes(app as any);
   return routes;
@@ -89,5 +91,32 @@ describe("video process endpoint", () => {
 
     expect(mocks.getEditJobForUser).toHaveBeenCalledWith(job.id, 101);
     expect(mocks.processVideoJob).toHaveBeenCalledWith(job.id, 101);
+  });
+});
+
+describe("video download endpoint", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+  });
+
+  it("selects stable storage keys and attachment names for completed outputs", () => {
+    const job = { id: "job_output_004", processedStorageKey: "users/101/video-editor/job_output_004/edited.mp4", subtitleStorageKey: "users/101/video-editor/job_output_004/subtitles.srt" };
+
+    expect(getDownloadAsset(job, "video")).toEqual({ storageKey: job.processedStorageKey, fileName: "cineflow-edit-job_output_004.mp4", contentType: "video/mp4" });
+    expect(getDownloadAsset(job, "subtitle")).toEqual({ storageKey: job.subtitleStorageKey, fileName: "cineflow-subtitles-job_output_004.srt", contentType: "application/x-subrip" });
+  });
+
+  it("does not attempt storage access when a guest does not own the requested job", async () => {
+    mocks.getEditJobForUser.mockResolvedValue(undefined);
+    const route = routeRegistry().find(entry => entry.path === "/api/video-jobs/:jobId/download");
+    const { response, state } = responseProbe();
+
+    await route?.handlers.at(-1)?.({ params: { jobId: "job_private_005" }, query: { asset: "video" } }, response);
+
+    expect(mocks.getEditJobForUser).toHaveBeenCalledWith("job_private_005", 101);
+    expect(mocks.storageGetSignedUrl).not.toHaveBeenCalled();
+    expect(state.statusCode).toBe(404);
+    expect(state.body).toEqual({ error: "Editing job was not found" });
   });
 });
