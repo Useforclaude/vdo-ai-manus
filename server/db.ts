@@ -13,6 +13,7 @@ import {
   videoClips,
   videoProjects,
   mcpAccessTokens,
+  mcpAuditLogs,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -327,6 +328,34 @@ export async function resolveMcpAccessToken(rawToken: string) {
   if (!project) return undefined;
   await db.update(mcpAccessTokens).set({ lastUsedAt: now }).where(eq(mcpAccessTokens.id, token.id));
   return { ...toPublicMcpToken(token), userId: token.userId, projectId: token.projectId };
+}
+
+export async function createMcpAuditLog(values: {
+  userId: number;
+  projectId: number;
+  tokenId: number;
+  toolName: string;
+  status: "succeeded" | "rejected" | "failed";
+  requestSummary: string;
+  resultSummary: string;
+}) {
+  const db = requireDb(await getDb());
+  await db.insert(mcpAuditLogs).values({
+    ...values,
+    toolName: values.toolName.slice(0, 96),
+    requestSummary: values.requestSummary.slice(0, 1000),
+    resultSummary: values.resultSummary.slice(0, 1000),
+  });
+}
+
+export async function listMcpAuditLogsForUser(userId: number, projectId: number, limit = 40) {
+  const project = await getVideoProjectForUser(projectId, userId);
+  if (!project) return undefined;
+  const db = requireDb(await getDb());
+  return db.select().from(mcpAuditLogs).where(and(
+    eq(mcpAuditLogs.userId, userId),
+    eq(mcpAuditLogs.projectId, projectId),
+  )).orderBy(desc(mcpAuditLogs.createdAt)).limit(Math.max(1, Math.min(limit, 100)));
 }
 
 export async function softDeleteProject(projectId: number, userId: number) {

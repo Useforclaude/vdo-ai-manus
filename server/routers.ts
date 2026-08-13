@@ -80,6 +80,16 @@ export const appRouter = router({
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
       return db.listMcpAccessTokensForUser(actor.userId, input?.projectId);
     }),
+    listMcpAuditLogs: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      limit: z.number().int().min(1).max(100).optional(),
+    })).query(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const logs = await db.listMcpAuditLogsForUser(actor.userId, input.projectId, input.limit);
+      if (!logs) throw new Error("Video project was not found");
+      return logs;
+    }),
     createMcpAccessToken: publicProcedure.input(z.object({
       projectId: z.number().int().positive(),
       label: z.string().trim().min(1).max(80),

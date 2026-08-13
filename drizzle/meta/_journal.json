@@ -43,6 +43,13 @@
       "when": 1786629996057,
       "tag": "0005_harsh_the_initiative",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1786631451599,
+      "tag": "0006_chief_tarot",
+      "breakpoints": true
     }
   ]
 }

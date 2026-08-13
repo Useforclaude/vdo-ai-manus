@@ -76,6 +76,22 @@ export const mcpAccessTokens = mysqlTable("mcp_access_tokens", {
   index("mcp_tokens_active_idx").on(table.tokenHash, table.expiresAt),
 ]);
 
+export const mcpAuditLogs = mysqlTable("mcp_audit_logs", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull(),
+  projectId: int("project_id").notNull(),
+  tokenId: int("token_id").notNull(),
+  toolName: varchar("tool_name", { length: 96 }).notNull(),
+  status: mysqlEnum("status", ["succeeded", "rejected", "failed"]).notNull(),
+  requestSummary: varchar("request_summary", { length: 1000 }).notNull(),
+  resultSummary: varchar("result_summary", { length: 1000 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  index("mcp_audit_project_created_idx").on(table.projectId, table.createdAt),
+  index("mcp_audit_token_created_idx").on(table.tokenId, table.createdAt),
+  index("mcp_audit_user_project_idx").on(table.userId, table.projectId),
+]);
+
 export const editJobs = mysqlTable("edit_jobs", {
   id: varchar("id", { length: 64 }).primaryKey(),
   projectId: int("project_id").notNull(),
@@ -110,5 +126,6 @@ export type InsertVideoClip = typeof videoClips.$inferInsert;
 export type SubtitlePreset = typeof subtitlePresets.$inferSelect;
 export type InsertSubtitlePreset = typeof subtitlePresets.$inferInsert;
 export type McpAccessToken = typeof mcpAccessTokens.$inferSelect;
+export type McpAuditLog = typeof mcpAuditLogs.$inferSelect;
 export type EditJob = typeof editJobs.$inferSelect;
 export type InsertEditJob = typeof editJobs.$inferInsert;

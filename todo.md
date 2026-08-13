@@ -80,3 +80,8 @@
 - [x] เพิ่มหน้า AI producer ให้ร่างแผนคำสั่งและให้ผู้ใช้ยืนยันก่อนสร้างงานตัดต่อ
 - [x] รองรับโมเดล OpenAI, Anthropic และ Google Gemini ที่ปรากฏใน model catalog ผ่าน server proxy โดยไม่เปิดเผย credential ต่อ browser
 - [x] เพิ่มเอกสารการเชื่อม MCP client และชุดทดสอบอัตโนมัติสำหรับ AI provider กับ MCP tools
+- [x] เพิ่ม guided prompts ของ MCP สำหรับงานตรวจ timeline, ตัดช่วงเงียบ, ทำซับ และ render
+- [x] เพิ่ม audit log ที่บันทึก agent, เวลา, project, tool, input ที่ปลอดภัย และผลลัพธ์ของคำสั่ง MCP
+- [x] เพิ่มหน้าแสดง audit log เฉพาะโปรเจกต์พร้อมรายละเอียดการทำงานของ agent
+- [x] เพิ่มปุ่มสร้างและคัดลอก config สำเร็จรูปสำหรับ Claude Desktop และ Cursor
+- [x] เพิ่ม Vitest และ browser E2E สำหรับ guided prompts, audit log และ config client

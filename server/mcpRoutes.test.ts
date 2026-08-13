@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   previewClipSilences: vi.fn(),
   interpretVideoCommand: vi.fn(),
   processVideoJob: vi.fn(),
+  createMcpAuditLog: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -23,6 +24,7 @@ vi.mock("./db", () => ({
   reorderVideoClips: mocks.reorderVideoClips,
   listEditJobsForUser: mocks.listEditJobsForUser,
   createEditJob: mocks.createEditJob,
+  createMcpAuditLog: mocks.createMcpAuditLog,
 }));
 
 vi.mock("./videoEditing", () => ({
@@ -95,5 +97,33 @@ describe("Cineflow MCP routes", () => {
 
     expect(JSON.stringify(body)).toContain("requires an edit or render token");
     expect(mocks.updateVideoClipTrim).not.toHaveBeenCalled();
+  });
+
+  it("publishes guided prompts that tell agents to confirm before changing or rendering", async () => {
+    mocks.resolveMcpAccessToken.mockResolvedValue({ id: 4, userId: 7, projectId: 31, scope: "read" });
+
+    const { body } = await callMcp("prompts/get", { name: "cineflow_remove_silence" });
+    const text = JSON.stringify(body);
+
+    expect(text).toContain("ask for confirmation");
+    expect(text).toContain("Never expose source URLs");
+  });
+
+  it("records a sanitized audit entry for each MCP tool call", async () => {
+    mocks.resolveMcpAccessToken.mockResolvedValue({ id: 4, userId: 7, projectId: 31, scope: "read" });
+
+    await callMcp("tools/call", { name: "cineflow_timeline", arguments: {} });
+
+    expect(mocks.createMcpAuditLog).toHaveBeenCalledWith(expect.objectContaining({
+      userId: 7,
+      projectId: 31,
+      tokenId: 4,
+      toolName: "cineflow_timeline",
+      status: "succeeded",
+      requestSummary: "{}",
+    }));
+    const auditEntry = mocks.createMcpAuditLog.mock.calls[0]?.[0] as { resultSummary: string };
+    expect(auditEntry.resultSummary).not.toContain("private-key");
+    expect(auditEntry.resultSummary).not.toContain("private-url");
   });
 });

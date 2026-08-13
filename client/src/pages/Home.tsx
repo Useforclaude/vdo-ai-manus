@@ -1,4 +1,5 @@
 import { trpc } from "@/lib/trpc";
+import { skipToken } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ArrowDown,
@@ -102,7 +103,21 @@ type McpToken = {
   revokedAt: Date | null;
 };
 
+type McpAuditLog = {
+  id: number;
+  toolName: string;
+  status: "succeeded" | "rejected" | "failed";
+  requestSummary: string;
+  resultSummary: string;
+  createdAt: Date;
+};
+
 const prompts = ["ตัดช่วงเงียบทั้งหมด", "สร้างซับไตเติลอัตโนมัติ", "Crop video to 16:9", "Keep the first 30 seconds"];
+const mcpGuidedPrompts = [
+  { id: "cineflow_review_timeline", title: "Review timeline", text: "Inspect the authorized Cineflow project timeline, identify editable trim points, and propose a concise edit plan without changing anything." },
+  { id: "cineflow_remove_silence", title: "Remove silence safely", text: "Preview silence on each authorized clip, explain the suggested removals, and ask for confirmation before using any edit tool." },
+  { id: "cineflow_prepare_subtitles", title: "Prepare subtitles", text: "Review the authorized project and recommend a Thai or English subtitle treatment, then ask for confirmation before creating a render." },
+];
 const subtitleCommand = /เงียบ|silence|dead air/;
 const subtitleRequest = /ซับ|subtitle|srt|caption/i;
 
@@ -201,10 +216,12 @@ export default function Home() {
   const mcpTokensQuery = trpc.video.listMcpAccessTokens.useQuery(project ? { projectId: project.id } : undefined, { enabled: Boolean(project) });
   const createMcpAccessToken = trpc.video.createMcpAccessToken.useMutation();
   const revokeMcpAccessToken = trpc.video.revokeMcpAccessToken.useMutation();
+  const mcpAuditLogsQuery = trpc.video.listMcpAuditLogs.useQuery(project ? { projectId: project.id, limit: 20 } : skipToken, { enabled: Boolean(project), refetchInterval: 8_000 });
   const clips = clipsQuery.data ?? [];
   const customPresets = (customPresetsQuery.data ?? []) as CustomSubtitlePreset[];
   const aiModels = (aiModelsQuery.data ?? []) as AiModelOption[];
   const mcpTokens = (mcpTokensQuery.data ?? []) as McpToken[];
+  const mcpAuditLogs = (mcpAuditLogsQuery.data ?? []) as McpAuditLog[];
   const selectedClip = clips.find(clip => clip.id === selectedClipId);
   const editableDurationMs = Math.max(1_000, Math.min(180_000, Math.round(previewDurationMs || selectedClip?.trimEndMs || 180_000)));
   const previewUrl = temporaryPreview || selectedClip?.storageUrl || "";
@@ -390,21 +407,36 @@ export default function Home() {
     }
   }
 
-  async function copyMcpSetup() {
+  function buildMcpClientConfig(client: "claude" | "cursor") {
     if (!issuedMcpToken) return;
-    const config = JSON.stringify({
+    return JSON.stringify({
       mcpServers: {
         cineflow: {
           url: mcpEndpoint,
           headers: { Authorization: `Bearer ${issuedMcpToken.token}` },
+          ...(client === "cursor" ? { description: "Cineflow video-editing tools for one authorized project" } : {}),
         },
       },
     }, null, 2);
+  }
+
+  async function copyMcpSetup(client: "claude" | "cursor" = "claude") {
+    const config = buildMcpClientConfig(client);
+    if (!config) return;
     try {
       await navigator.clipboard.writeText(config);
-      toast.success("คัดลอกตัวอย่างการเชื่อม MCP แล้ว");
+      toast.success(`คัดลอก config สำหรับ ${client === "claude" ? "Claude Desktop" : "Cursor"} แล้ว`);
     } catch {
       toast.info("เลือกและคัดลอก token ด้านล่างด้วยตนเอง");
+    }
+  }
+
+  async function copyMcpGuidedPrompt(prompt: typeof mcpGuidedPrompts[number]) {
+    try {
+      await navigator.clipboard.writeText(`${prompt.text}\n\nUse only Cineflow MCP tools for the authorized project. Never reveal source URLs, storage keys, or capability tokens.`);
+      toast.success(`คัดลอก guided prompt: ${prompt.title}`);
+    } catch {
+      toast.info("ไม่สามารถคัดลอก prompt ได้");
     }
   }
 
@@ -753,8 +785,10 @@ export default function Home() {
             <div className="mb-3 flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#eaf4dc] text-[#557d38]"><Link2 size={17} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#557a48]">MCP access</p><h2 className="mt-0.5 font-display text-lg font-semibold tracking-[-.035em] text-[#21332b]">Connect Claude, Cursor, n8n & agents</h2><p className="mt-1 text-[10px] leading-4 text-[#718078]">สร้าง Bearer token เฉพาะโปรเจกต์ แล้วกำหนดขอบเขต read, edit หรือ render</p></div></div>
             <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_104px_92px]"><input aria-label="MCP token label" value={mcpTokenLabel} maxLength={80} onChange={event => setMcpTokenLabel(event.target.value)} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2.5 py-2 text-xs outline-none focus:border-[#91b85e]" /><select aria-label="MCP token scope" value={mcpTokenScope} onChange={event => setMcpTokenScope(event.target.value as "read" | "edit" | "render")} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2 py-2 text-[10px] font-semibold text-[#466446] outline-none"><option value="read">Read only</option><option value="edit">Edit timeline</option><option value="render">Render</option></select><select aria-label="MCP token expiry" value={mcpTokenDays} onChange={event => setMcpTokenDays(Number(event.target.value) as 1 | 7 | 30)} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2 py-2 text-[10px] font-semibold text-[#466446] outline-none"><option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option></select></div>
             <button aria-label="Create MCP access token" onClick={() => void issueMcpToken()} disabled={createMcpAccessToken.isPending} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-45">{createMcpAccessToken.isPending ? <Loader2 className="size-3 animate-spin" /> : <KeyRound size={12} />} Create scoped token</button>
-            {issuedMcpToken && <div className="mt-3 rounded-xl border border-[#cfe3c7] bg-[#f4faed] p-3"><div className="flex items-center justify-between gap-2"><p className="inline-flex items-center gap-1 text-[10px] font-bold text-[#416440]"><ShieldCheck size={12} /> Displayed once — save securely</p><button aria-label="Copy MCP configuration" onClick={() => void copyMcpSetup()} className="inline-flex items-center gap-1 rounded-md border border-[#c6ddbd] bg-white px-2 py-1 text-[9px] font-semibold text-[#496d42]"><ClipboardCopy size={11} /> Copy config</button></div><p className="mt-2 break-all rounded-lg bg-white px-2.5 py-2 font-mono text-[9px] text-[#45574b]">{issuedMcpToken.token}</p><p className="mt-2 text-[9px] leading-4 text-[#6c7e71]">Endpoint: <span className="font-mono">{mcpEndpoint}</span></p></div>}
+            {issuedMcpToken && <div className="mt-3 rounded-xl border border-[#cfe3c7] bg-[#f4faed] p-3"><div className="flex items-center justify-between gap-2"><p className="inline-flex items-center gap-1 text-[10px] font-bold text-[#416440]"><ShieldCheck size={12} /> Displayed once — save securely</p><span className="text-[9px] font-medium text-[#637567]">Project-scoped</span></div><p className="mt-2 break-all rounded-lg bg-white px-2.5 py-2 font-mono text-[9px] text-[#45574b]">{issuedMcpToken.token}</p><p className="mt-2 text-[9px] leading-4 text-[#6c7e71]">Endpoint: <span className="font-mono">{mcpEndpoint}</span></p><div className="mt-2 flex flex-wrap gap-1.5"><button aria-label="Copy Claude Desktop configuration" onClick={() => void copyMcpSetup("claude")} className="inline-flex items-center gap-1 rounded-md border border-[#c6ddbd] bg-white px-2 py-1 text-[9px] font-semibold text-[#496d42]"><ClipboardCopy size={11} /> Claude Desktop config</button><button aria-label="Copy Cursor configuration" onClick={() => void copyMcpSetup("cursor")} className="inline-flex items-center gap-1 rounded-md border border-[#c6ddbd] bg-white px-2 py-1 text-[9px] font-semibold text-[#496d42]"><ClipboardCopy size={11} /> Cursor config</button></div></div>}
             {mcpTokens.length > 0 && <div className="mt-3 border-t border-[#e2e9df] pt-3"><p className="mb-1.5 text-[9px] font-bold uppercase tracking-[.11em] text-[#708078]">Active project tokens</p><div className="space-y-1.5">{mcpTokens.filter(token => !token.revokedAt).map(token => <div key={token.id} className="flex items-center justify-between gap-2 rounded-lg bg-[#f8faf7] px-2.5 py-2"><p className="min-w-0 truncate text-[10px] font-semibold text-[#405b45]">{token.label} <span className="font-normal text-[#77847d]">· {token.scope} · expires {new Date(token.expiresAt).toLocaleDateString()}</span></p><button aria-label={`Revoke MCP token ${token.label}`} onClick={() => void revokeToken(token)} disabled={revokeMcpAccessToken.isPending} className="rounded px-1.5 py-1 text-[9px] font-semibold text-[#9c625b] transition hover:bg-rose-50 disabled:opacity-40">Revoke</button></div>)}</div></div>}
+            <div className="mt-3 border-t border-[#e2e9df] pt-3"><p className="text-[9px] font-bold uppercase tracking-[.11em] text-[#708078]">Guided prompts</p><p className="mt-1 text-[9px] leading-4 text-[#77847d]">คัดลอก prompt เพื่อให้ agent เริ่มงานตามสิทธิ์ token และต้องขอการยืนยันก่อนแก้ไขหรือ render</p><div className="mt-2 grid gap-1.5">{mcpGuidedPrompts.map(guidedPrompt => <div key={guidedPrompt.id} className="flex items-center justify-between gap-2 rounded-lg bg-[#f8faf7] px-2.5 py-2"><p className="text-[10px] font-semibold text-[#405b45]">{guidedPrompt.title}</p><button aria-label={`Copy MCP prompt ${guidedPrompt.id}`} onClick={() => void copyMcpGuidedPrompt(guidedPrompt)} className="inline-flex items-center gap-1 rounded border border-[#d5e1d0] bg-white px-1.5 py-1 text-[9px] font-semibold text-[#557647] transition hover:bg-[#f1f7ea]"><ClipboardCopy size={10} /> Copy</button></div>)}</div></div>
+            <div className="mt-3 border-t border-[#e2e9df] pt-3"><div className="flex items-center justify-between gap-2"><p className="text-[9px] font-bold uppercase tracking-[.11em] text-[#708078]">Agent audit log</p><span className="text-[9px] text-[#8a968f]">Latest 20</span></div>{mcpAuditLogsQuery.isLoading ? <p className="mt-2 text-[10px] text-[#7a877f]">Loading activity…</p> : mcpAuditLogs.length ? <div className="mt-2 max-h-40 space-y-1.5 overflow-y-auto pr-1">{mcpAuditLogs.map(log => <div key={log.id} className="rounded-lg border border-[#edf0eb] bg-[#fbfcfa] px-2.5 py-2"><div className="flex items-center justify-between gap-2"><p className="text-[10px] font-semibold text-[#405b45]">{log.toolName}</p><span className={`rounded-full px-1.5 py-0.5 text-[8px] font-bold ${log.status === "succeeded" ? "bg-[#eaf5df] text-[#557c35]" : log.status === "rejected" ? "bg-amber-50 text-amber-700" : "bg-rose-50 text-rose-700"}`}>{log.status}</span></div><p className="mt-0.5 truncate text-[9px] text-[#6e7d75]">{log.requestSummary} · {log.resultSummary}</p><p className="mt-0.5 text-[8px] text-[#9aa59e]">{new Date(log.createdAt).toLocaleString()}</p></div>)}</div> : <p className="mt-2 text-[10px] leading-4 text-[#7a877f]">ยังไม่มีคำสั่งจาก agent สำหรับโปรเจกต์นี้</p>}</div>
           </div>
         </section>}
 

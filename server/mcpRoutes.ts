@@ -6,6 +6,20 @@ type JsonRpcId = string | number | null;
 type McpAccess = NonNullable<Awaited<ReturnType<typeof db.resolveMcpAccessToken>>>;
 
 const MCP_PROTOCOL_VERSION = "2025-03-26";
+const MCP_PROMPTS = [
+  {
+    name: "cineflow_review_timeline",
+    description: "Inspect the authorized project timeline, identify editable trim points, and propose a concise edit plan without changing anything.",
+  },
+  {
+    name: "cineflow_remove_silence",
+    description: "Preview silence on each authorized clip, explain the suggested removals, and ask for confirmation before using any edit tool.",
+  },
+  {
+    name: "cineflow_prepare_subtitles",
+    description: "Review the project and recommend a Thai or English subtitle treatment, then ask for confirmation before creating a render.",
+  },
+] as const;
 const MCP_TOOLS = [
   {
     name: "cineflow_project_summary",
@@ -96,6 +110,38 @@ function textResult(value: unknown, isError = false) {
     content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }],
     ...(isError ? { isError: true } : {}),
   };
+}
+
+function safeRequestSummary(args: Record<string, unknown>) {
+  const summary: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key === "command" && typeof value === "string") summary.commandLength = value.length;
+    else if (Array.isArray(value)) summary[key] = value.length;
+    else if (value === null || ["string", "number", "boolean"].includes(typeof value)) summary[key] = value;
+    else if (value && typeof value === "object") summary[key] = Object.keys(value as Record<string, unknown>);
+  }
+  return JSON.stringify(summary);
+}
+
+function safeResultSummary(result: ReturnType<typeof textResult>) {
+  const text = result.content[0]?.text ?? "";
+  return `${result.isError ? "Rejected" : "Succeeded"}: ${text.slice(0, 900)}`;
+}
+
+async function auditToolCall(access: McpAccess, toolName: string, args: Record<string, unknown>, result: ReturnType<typeof textResult>, status?: "failed") {
+  try {
+    await db.createMcpAuditLog({
+      userId: access.userId,
+      projectId: access.projectId,
+      tokenId: access.id,
+      toolName: toolName || "unknown",
+      status: status ?? (result.isError ? "rejected" : "succeeded"),
+      requestSummary: safeRequestSummary(args),
+      resultSummary: safeResultSummary(result),
+    });
+  } catch (error) {
+    console.error("[MCP] Unable to persist audit log", error);
+  }
 }
 
 function tokenFromRequest(req: Request) {
@@ -214,17 +260,34 @@ export function registerMcpRoutes(app: Express) {
     if (body.method === "notifications/initialized") return res.status(202).end();
     if (body.method === "initialize") return rpcSuccess(res, id, {
       protocolVersion: MCP_PROTOCOL_VERSION,
-      capabilities: { tools: { listChanged: false } },
+      capabilities: { tools: { listChanged: false }, prompts: { listChanged: false } },
       serverInfo: { name: "Cineflow", version: "1.0.0" },
       instructions: "This token is limited to one Cineflow project. Source URLs, storage keys, and other projects are never available through MCP.",
     });
     if (body.method === "ping") return rpcSuccess(res, id, {});
     if (body.method === "tools/list") return rpcSuccess(res, id, { tools: MCP_TOOLS });
+    if (body.method === "prompts/list") return rpcSuccess(res, id, { prompts: MCP_PROMPTS });
+    if (body.method === "prompts/get") {
+      const params = body.params && typeof body.params === "object" ? body.params as Record<string, unknown> : {};
+      const name = typeof params.name === "string" ? params.name : "";
+      const prompt = MCP_PROMPTS.find(item => item.name === name);
+      if (!prompt) return rpcError(res, id, -32602, "Unknown Cineflow prompt");
+      return rpcSuccess(res, id, { description: prompt.description, messages: [{ role: "user", content: { type: "text", text: `Use the Cineflow tools only for the authorized project. ${prompt.description} Never expose source URLs, storage keys, or tokens.` } }] });
+    }
     if (body.method === "tools/call") {
       const params = body.params && typeof body.params === "object" ? body.params as Record<string, unknown> : {};
       const name = typeof params.name === "string" ? params.name : "";
       const args = params.arguments && typeof params.arguments === "object" ? params.arguments as Record<string, unknown> : {};
-      return rpcSuccess(res, id, await callTool(access, name, args));
+      try {
+        const result = await callTool(access, name, args);
+        await auditToolCall(access, name, args, result);
+        return rpcSuccess(res, id, result);
+      } catch (error) {
+        const result = textResult("Cineflow could not complete this MCP tool call.", true);
+        await auditToolCall(access, name, args, result, "failed");
+        console.error("[MCP] Tool call failed", error);
+        return rpcSuccess(res, id, result);
+      }
     }
     return rpcError(res, id, -32601, `Unsupported MCP method: ${body.method}`);
   });

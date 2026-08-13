@@ -6,6 +6,7 @@ const secondClip = "/tmp/cineflow-smoke/clip-two.mp4";
 
 const browser = await chromium.launch({ headless: true, executablePath: "/usr/bin/chromium" });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: baseUrl });
 
 try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
@@ -94,6 +95,33 @@ try {
   await tokenCreated;
   await page.getByText("Displayed once — save securely", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   await page.getByText(/^cfmcp_/).waitFor({ state: "visible", timeout: 10_000 });
+  const rawMcpToken = (await page.getByText(/^cfmcp_/).textContent())?.trim();
+  if (!rawMcpToken) throw new Error("MCP capability token was not displayed");
+  await page.getByLabel("Copy MCP prompt cineflow_review_timeline").click();
+  const guidedPrompt = await page.evaluate(() => navigator.clipboard.readText());
+  if (!guidedPrompt.includes("without changing anything") || !guidedPrompt.includes("Never reveal source URLs")) throw new Error("Guided MCP prompt did not include safety instructions");
+  await page.getByLabel("Copy Claude Desktop configuration").click();
+  const claudeConfig = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+  if (!claudeConfig.mcpServers?.cineflow?.url?.includes("/api/mcp")) throw new Error("Claude Desktop MCP config was invalid");
+  await page.getByLabel("Copy Cursor configuration").click();
+  const cursorConfig = JSON.parse(await page.evaluate(() => navigator.clipboard.readText()));
+  if (!cursorConfig.mcpServers?.cineflow?.headers?.Authorization?.includes(rawMcpToken)) throw new Error("Cursor MCP config did not include the project token");
+  const mcpCall = await page.evaluate(async token => {
+    const response = await fetch("/api/mcp", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "cineflow_timeline", arguments: {} } }),
+    });
+    return { status: response.status, body: await response.json() };
+  }, rawMcpToken);
+  if (mcpCall.status !== 200 || !JSON.stringify(mcpCall.body).includes("clip-two.mp4")) throw new Error("MCP timeline tool did not return the authorized project timeline");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "Clip library" }).click();
+  await library.getByLabel("Search projects").fill("Copy of E2E Timeline Studio");
+  await library.getByRole("button", { name: /Copy of E2E Timeline Studio/ }).click();
+  await library.waitFor({ state: "hidden", timeout: 10_000 });
+  await page.getByText("cineflow_timeline", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  await page.getByText("succeeded", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   page.once("dialog", dialog => dialog.accept());
   const tokenRevoked = page.waitForResponse(response => response.url().includes("video.revokeMcpAccessToken") && response.ok(), { timeout: 10_000 });
   await page.getByLabel("Revoke MCP token E2E Agent").click();
@@ -131,7 +159,7 @@ try {
   console.log(JSON.stringify({
     status: "passed",
     previewUrl,
-    checks: ["two uploads", "selected preview", "silence preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim with undo/redo", "project rename and library open", "project duplication", "AI producer draft", "MCP token create and revoke", "project preset export/import", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
+    checks: ["two uploads", "selected preview", "silence preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim with undo/redo", "project rename and library open", "project duplication", "AI producer draft", "MCP guided prompt and Claude/Cursor config", "MCP tool call with project token and audit log", "MCP token revoke", "project preset export/import", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
   }));
 } finally {
   await browser.close();
