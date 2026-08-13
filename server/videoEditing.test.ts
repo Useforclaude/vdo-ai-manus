@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { createSrt, fallbackPlan } from "./videoEditing";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const llm = vi.hoisted(() => ({
+  invokeLLM: vi.fn(),
+  listLLMModels: vi.fn(),
+}));
+
+vi.mock("./_core/llm", () => llm);
+
+import { createSrt, fallbackPlan, interpretVideoCommand } from "./videoEditing";
 import { completeVideoJob, failVideoJob, initialVideoJobState, startVideoJob, updateVideoJobProgress } from "./videoJobState";
+
+beforeEach(() => {
+  llm.listLLMModels.mockResolvedValue({ data: [{ id: "gpt-5-mini" }] });
+  llm.invokeLLM.mockReset();
+});
 
 describe("fallbackPlan", () => {
   it("maps a Thai command into silence removal and subtitles", () => {
@@ -16,6 +29,26 @@ describe("fallbackPlan", () => {
     const plan = fallbackPlan("Keep the first 30 seconds and crop to 16:9");
     expect(plan.operations).toContainEqual({ type: "trim", startSeconds: 0, endSeconds: 30 });
     expect(plan.operations).toContainEqual({ type: "crop_16_9" });
+  });
+});
+
+describe("interpretVideoCommand", () => {
+  it("uses a JSON text response from the LLM without enabling incompatible JSON mode", async () => {
+    llm.invokeLLM.mockResolvedValue({
+      choices: [{
+        message: {
+          content: "```json\n{\"sourceLanguage\":\"th\",\"summary\":\"ตัดช่วงเงียบและสร้างซับ\",\"operations\":[{\"type\":\"remove_silence\"},{\"type\":\"generate_subtitles\"}]}\n```",
+        },
+      }],
+    });
+
+    const plan = await interpretVideoCommand("ตัดช่วงเงียบแล้วสร้างซับไตเติล");
+
+    expect(plan).toMatchObject({
+      sourceLanguage: "th",
+      operations: [{ type: "remove_silence" }, { type: "generate_subtitles" }],
+    });
+    expect(llm.invokeLLM).toHaveBeenCalledWith(expect.not.objectContaining({ response_format: expect.anything() }));
   });
 });
 

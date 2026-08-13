@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getVideoProjectForUser: vi.fn(),
   interpretVideoCommand: vi.fn(),
   listEditJobsForUser: vi.fn(),
+  resolveVideoActor: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
@@ -18,6 +19,8 @@ vi.mock("./videoEditing", () => ({
   createJobId: () => "job_test_001",
   interpretVideoCommand: mocks.interpretVideoCommand,
 }));
+
+vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
 
 import { appRouter } from "./routers";
 
@@ -42,6 +45,7 @@ function createContext(userId: number | null = 7): TrpcContext {
 describe("video router", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 7, isGuest: false });
     mocks.interpretVideoCommand.mockResolvedValue({ sourceLanguage: "th", operations: [{ type: "generate_subtitles" }], summary: "สร้างซับไตเติล" });
   });
 
@@ -72,8 +76,12 @@ describe("video router", () => {
     expect(mocks.createEditJob).not.toHaveBeenCalled();
   });
 
-  it("rejects video routes for unauthenticated callers", async () => {
+  it("lists jobs for a browser guest without a signed-in user", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.listEditJobsForUser.mockResolvedValue([{ id: "job_guest_001", userId: 101 }]);
     const caller = appRouter.createCaller(createContext(null));
-    await expect(caller.video.listJobs()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+    await expect(caller.video.listJobs()).resolves.toEqual([{ id: "job_guest_001", userId: 101 }]);
+    expect(mocks.listEditJobsForUser).toHaveBeenCalledWith(101);
   });
 });

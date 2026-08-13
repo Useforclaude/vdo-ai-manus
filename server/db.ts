@@ -50,6 +50,22 @@ export async function getUserByOpenId(openId: string) {
   return result[0];
 }
 
+export async function getOrCreateGuestUser(guestToken: string) {
+  const openId = `guest:${guestToken}`;
+  const db = requireDb(await getDb());
+  const now = new Date();
+  await db.insert(users).values({
+    openId,
+    name: "Cineflow guest",
+    loginMethod: "guest",
+    role: "user",
+    lastSignedIn: now,
+  }).onDuplicateKeyUpdate({ set: { lastSignedIn: now } });
+  const rows = await db.select().from(users).where(eq(users.openId, openId)).limit(1);
+  if (!rows[0]) throw new Error("Unable to create guest session");
+  return rows[0];
+}
+
 export async function createVideoProject(values: InsertVideoProject) {
   const db = requireDb(await getDb());
   const result = await db.insert(videoProjects).values(values);

@@ -17,35 +17,10 @@ const MAX_TRANSCRIPTION_BYTES = 16 * 1024 * 1024;
 const SILENCE_NOISE = "-35dB";
 const SILENCE_DURATION = "0.4";
 
-const planSchema = {
-  type: "json_schema" as const,
-  json_schema: {
-    name: "video_edit_plan",
-    strict: true,
-    schema: {
-      type: "object",
-      properties: {
-        sourceLanguage: { type: "string", enum: ["th", "en", "mixed", "unknown"] },
-        summary: { type: "string" },
-        operations: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              type: { type: "string", enum: ["remove_silence", "trim", "crop_16_9", "generate_subtitles"] },
-              startSeconds: { type: "number" },
-              endSeconds: { type: "number" },
-            },
-            required: ["type"],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ["sourceLanguage", "summary", "operations"],
-      additionalProperties: false,
-    },
-  },
-};
+const PLAN_INSTRUCTIONS = `You interpret video-editing requests in Thai and English.
+Return only a valid, minified JSON object with this exact shape:
+{"sourceLanguage":"th|en|mixed|unknown","summary":"short plan summary","operations":[{"type":"remove_silence|trim|crop_16_9|generate_subtitles","startSeconds":0,"endSeconds":0}]}
+Omit startSeconds and endSeconds unless the request gives an explicit time range. For the first N seconds, use trim with startSeconds 0 and endSeconds N. Never invent timestamps. Return an empty operations array when no supported operation is requested. Do not use Markdown or code fences.`;
 
 export function fallbackPlan(command: string): EditPlan {
   const normalized = command.toLowerCase();
@@ -81,6 +56,13 @@ function validatePlan(raw: EditPlan, fallback: EditPlan): EditPlan {
   };
 }
 
+function parsePlanContent(content: string): EditPlan {
+  const normalized = content.trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "");
+  return JSON.parse(normalized) as EditPlan;
+}
+
 export async function interpretVideoCommand(command: string): Promise<EditPlan> {
   const fallback = fallbackPlan(command);
   try {
@@ -89,19 +71,17 @@ export async function interpretVideoCommand(command: string): Promise<EditPlan> 
     if (!model) return fallback;
     const response = await invokeLLM({
       model,
-      maxTokens: 650,
-      response_format: planSchema,
       messages: [
         {
           role: "system",
-          content: "You interpret video-editing requests in Thai and English. Return only operations supported by the schema. For a command asking for the first N seconds, use trim with startSeconds 0 and endSeconds N. Never invent timestamps when the request does not provide them.",
+          content: PLAN_INSTRUCTIONS,
         },
         { role: "user", content: command },
       ],
     });
     const content = response.choices[0]?.message?.content;
     if (typeof content !== "string") return fallback;
-    const parsed = JSON.parse(content) as EditPlan;
+    const parsed = parsePlanContent(content);
     return validatePlan(parsed, fallback);
   } catch (error) {
     console.warn("[Video] Falling back to deterministic command interpretation", error);

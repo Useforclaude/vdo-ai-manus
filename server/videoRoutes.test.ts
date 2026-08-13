@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  authenticateRequest: vi.fn(),
   getEditJobForUser: vi.fn(),
   processVideoJob: vi.fn(),
+  resolveVideoActor: vi.fn(),
 }));
 
-vi.mock("./_core/sdk", () => ({ sdk: { authenticateRequest: mocks.authenticateRequest } }));
 vi.mock("./db", () => ({ getEditJobForUser: mocks.getEditJobForUser }));
 vi.mock("./videoEditing", () => ({ MAX_SOURCE_BYTES: 180 * 1024 * 1024, processVideoJob: mocks.processVideoJob }));
 vi.mock("./storage", () => ({ storagePut: vi.fn() }));
+vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
 
 import { registerVideoRoutes } from "./videoRoutes";
 
@@ -36,7 +36,7 @@ function responseProbe() {
 describe("video process endpoint", () => {
   beforeEach(() => {
     vi.resetAllMocks();
-    mocks.authenticateRequest.mockResolvedValue({ id: 7 });
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 7, isGuest: false });
     mocks.processVideoJob.mockResolvedValue(undefined);
   });
 
@@ -64,7 +64,7 @@ describe("video process endpoint", () => {
     expect(mocks.processVideoJob).not.toHaveBeenCalled();
   });
 
-  it("acknowledges a queued job and starts processing for the authenticated owner", async () => {
+  it("acknowledges a queued job and starts processing for the current actor", async () => {
     const job = { id: "job_pending_002", status: "queued", progress: 0 };
     mocks.getEditJobForUser.mockResolvedValue(job);
     const route = routeRegistry().find(entry => entry.path === "/api/video-jobs/:jobId/process");
@@ -76,5 +76,18 @@ describe("video process endpoint", () => {
     expect(mocks.processVideoJob).toHaveBeenCalledWith(job.id, 7);
     expect(state.statusCode).toBe(202);
     expect(state.body).toEqual({ job });
+  });
+
+  it("uses a guest actor to keep queued work scoped to its browser session", async () => {
+    const job = { id: "job_guest_003", status: "queued", progress: 0 };
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getEditJobForUser.mockResolvedValue(job);
+    const route = routeRegistry().find(entry => entry.path === "/api/video-jobs/:jobId/process");
+    const { response } = responseProbe();
+
+    await route?.handlers.at(-1)?.({ params: { jobId: job.id } }, response);
+
+    expect(mocks.getEditJobForUser).toHaveBeenCalledWith(job.id, 101);
+    expect(mocks.processVideoJob).toHaveBeenCalledWith(job.id, 101);
   });
 });

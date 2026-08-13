@@ -2,9 +2,10 @@ import { z } from "zod";
 import { COOKIE_NAME } from "@shared/const";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
-import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
+import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
 import { createJobId, interpretVideoCommand } from "./videoEditing";
+import { resolveVideoActor } from "./videoActor";
 
 export const appRouter = router({
   system: systemRouter,
@@ -17,15 +18,19 @@ export const appRouter = router({
     }),
   }),
   video: router({
-    listJobs: protectedProcedure.query(({ ctx }) => db.listEditJobsForUser(ctx.user.id)),
-    createJob: protectedProcedure.input(z.object({ projectId: z.number().int().positive(), command: z.string().trim().min(2).max(1200) })).mutation(async ({ ctx, input }) => {
-      const project = await db.getVideoProjectForUser(input.projectId, ctx.user.id);
+    listJobs: publicProcedure.query(async ({ ctx }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      return db.listEditJobsForUser(actor.userId);
+    }),
+    createJob: publicProcedure.input(z.object({ projectId: z.number().int().positive(), command: z.string().trim().min(2).max(1200) })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
       if (!project) throw new Error("Video project was not found");
       const operationPlan = await interpretVideoCommand(input.command);
       return db.createEditJob({
         id: createJobId(),
         projectId: project.id,
-        userId: ctx.user.id,
+        userId: actor.userId,
         command: input.command,
         commandLanguage: operationPlan.sourceLanguage,
         operationPlan,

@@ -1,5 +1,3 @@
-import { useAuth } from "@/_core/hooks/useAuth";
-import { startLogin } from "@/const";
 import { trpc } from "@/lib/trpc";
 import { toast } from "sonner";
 import {
@@ -64,12 +62,10 @@ function planLabel(type: string) {
 }
 
 function videoApiHeaders(headers: Record<string, string> = {}) {
-  const token = window.sessionStorage.getItem("manus-cookie");
-  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers;
+  return headers;
 }
 
 export default function Home() {
-  const { isAuthenticated, loading, user } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string>("");
   const [command, setCommand] = useState("");
@@ -78,7 +74,6 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const jobsQuery = trpc.video.listJobs.useQuery(undefined, {
-    enabled: isAuthenticated,
     refetchInterval: query => query.state.data?.some(job => job.status === "queued" || job.status === "processing") ? 2000 : false,
   });
   const createJob = trpc.video.createJob.useMutation();
@@ -91,11 +86,6 @@ export default function Home() {
   }, [previewUrl]);
 
   async function uploadVideo(file: File) {
-    if (!isAuthenticated) {
-      toast.info("เข้าสู่ระบบก่อนอัปโหลดวิดีโอ");
-      startLogin();
-      return;
-    }
     if (!file.type.startsWith("video/")) {
       toast.error("โปรดเลือกไฟล์วิดีโอ");
       return;
@@ -181,15 +171,13 @@ export default function Home() {
           <div className="hidden items-center gap-8 text-[13px] font-medium text-[#66716d] md:flex">
             <span className="text-[#18211f]">Editor</span><span>Library</span><span>Help</span>
           </div>
-          {loading ? <Loader2 className="size-5 animate-spin text-[#71807a]" /> : isAuthenticated ? (
-            <div className="flex items-center gap-3"><div className="hidden text-right sm:block"><p className="text-xs font-semibold">{user?.name || "Workspace"}</p><p className="text-[11px] text-[#7c8682]">Personal studio</p></div><div className="grid size-9 place-items-center rounded-full bg-[#d8ece4] text-xs font-bold text-[#255347]">{user?.name?.slice(0, 1).toUpperCase() || "U"}</div></div>
-          ) : <button onClick={startLogin} className="rounded-full bg-[#152b27] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#24443b] active:scale-[.97]">Sign in</button>}
+          <div className="flex items-center gap-2 rounded-full border border-[#dfe5d9] bg-[#f3f8e8] px-3 py-2 text-[11px] font-semibold text-[#496935]"><span className="size-1.5 rounded-full bg-[#91bf3b]" /> Ready to edit</div>
         </div>
       </header>
 
       <main className="mx-auto max-w-[1440px] px-5 py-7 lg:px-10 lg:py-9">
         <section className="mb-8 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div><p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#53766a]"><span className="size-1.5 rounded-full bg-[#a5d83d]" /> AI-powered editing</p><h1 className="font-display text-3xl font-semibold tracking-[-0.055em] sm:text-[40px]">Make the cut. <span className="text-[#789c55]">Say the word.</span></h1><p className="mt-2 max-w-xl text-sm leading-6 text-[#67726e]">อัปโหลดวิดีโอ แล้วบอกสิ่งที่ต้องการด้วยภาษาไทยหรือ English. เราจะแปลงคำสั่งของคุณเป็นงานตัดต่อที่ตรวจสอบได้</p></div>
+          <div><p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#53766a]"><span className="size-1.5 rounded-full bg-[#a5d83d]" /> AI-powered editing</p><h1 className="font-display text-3xl font-semibold tracking-[-0.055em] sm:text-[40px]">Make the cut. <span className="text-[#789c55]">Say the word.</span></h1><p className="mt-2 max-w-xl text-sm leading-6 text-[#67726e]">อัปโหลดวิดีโอ แล้วบอกสิ่งที่ต้องการด้วยภาษาไทยหรือ English. เราจะแปลงคำสั่งของคุณเป็นงานตัดต่อที่ตรวจสอบได้</p><p className="mt-2 text-[11px] font-medium text-[#78827c]">เริ่มได้ทันที ไม่ต้อง Sign in — งานของคุณผูกกับเบราว์เซอร์นี้</p></div>
           <div className="flex items-center gap-3 rounded-2xl border border-[#e3e4df] bg-[#fbfaf8] px-4 py-3"><div className="grid size-8 place-items-center rounded-lg bg-[#eef6d9] text-[#6c9131]"><Sparkles size={15} /></div><div><p className="text-xs font-semibold">Thai + English commands</p><p className="text-[11px] text-[#7a8580]">understood naturally</p></div></div>
         </section>
 
@@ -198,7 +186,7 @@ export default function Home() {
             <div className="flex h-14 items-center justify-between border-b border-white/10 px-5 text-white"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#c4ef55]" /><span className="text-xs font-semibold">Source preview</span></div>{project ? <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-medium text-white/70">{formatBytes(project.sourceBytes)}</span> : <span className="text-[11px] text-white/45">Ready when you are</span>}</div>
             <div className="relative aspect-video bg-[radial-gradient(circle_at_42%_30%,#405e50_0%,#25372f_35%,#141c19_78%)]">
               {previewUrl ? <video controls className="size-full object-contain" src={previewUrl} /> : <div className="absolute inset-0 grid place-items-center"><div className="text-center text-white"><div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white/10 text-[#d0ef91]"><Play size={22} fill="currentColor" /></div><p className="text-sm font-medium">Your preview will appear here</p><p className="mt-1 text-xs text-white/55">MP4, MOV, WebM and more</p></div></div>}
-              {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] backdrop-blur-sm"><div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely</p><p className="mt-1 text-[11px] text-[#68736f]">Saving your source to private storage</p></div></div>}
+              {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] backdrop-blur-sm"><div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely</p><p className="mt-1 text-[11px] text-[#68736f]">Saving your source to this browser session</p></div></div>}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1b2421] px-5 py-4"><div className="flex items-center gap-3 text-xs text-white/65"><FileVideo2 size={15} className="text-[#b9e65c]" /><span className="max-w-[260px] truncate">{project?.sourceFileName || "No source selected"}</span></div>{project && <button onClick={() => { setProject(null); setPreviewUrl(""); }} className="flex items-center gap-1.5 text-[11px] font-medium text-white/55 transition hover:text-white"><X size={14} /> Replace</button>}</div>
           </section>
@@ -209,7 +197,7 @@ export default function Home() {
               <div><div className="mx-auto mb-3 grid size-11 place-items-center rounded-xl bg-white text-[#6d9846] shadow-sm transition group-hover:-translate-y-0.5"><Plus size={19} /></div><p className="text-sm font-semibold">Drop video here</p><p className="mt-1 text-[11px] leading-5 text-[#74807b]">or browse from your computer<br />Maximum file size: 180 MB</p></div>
             </button>
             <input ref={inputRef} className="hidden" type="file" accept="video/*" onChange={onFileChange} />
-            <div className="mt-4 grid grid-cols-3 divide-x divide-[#e4e6e1] rounded-xl border border-[#e4e6e1] bg-white px-1 py-2 text-center"><div><p className="text-[10px] font-semibold text-[#7d8883]">UPLOAD</p><p className="mt-1 text-[11px] font-bold">S3 secure</p></div><div><p className="text-[10px] font-semibold text-[#7d8883]">COMMANDS</p><p className="mt-1 text-[11px] font-bold">TH / EN</p></div><div><p className="text-[10px] font-semibold text-[#7d8883]">PROCESSING</p><p className="mt-1 text-[11px] font-bold">FFmpeg</p></div></div>
+            <div className="mt-4 grid grid-cols-3 divide-x divide-[#e4e6e1] rounded-xl border border-[#e4e6e1] bg-white px-1 py-2 text-center"><div><p className="text-[10px] font-semibold text-[#7d8883]">SESSION</p><p className="mt-1 text-[11px] font-bold">No sign in</p></div><div><p className="text-[10px] font-semibold text-[#7d8883]">COMMANDS</p><p className="mt-1 text-[11px] font-bold">TH / EN</p></div><div><p className="text-[10px] font-semibold text-[#7d8883]">PROCESSING</p><p className="mt-1 text-[11px] font-bold">FFmpeg</p></div></div>
           </section>
         </div>
 
