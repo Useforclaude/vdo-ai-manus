@@ -17,6 +17,8 @@ import {
   PencilLine,
   Play,
   Plus,
+  RotateCcw,
+  RotateCw,
   Save,
   Scissors,
   Search,
@@ -29,6 +31,7 @@ import {
 import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
 import { extractWaveformPeaks, type WaveformPeaks } from "@/lib/waveform";
+import { buildProjectPreset, parseProjectPreset } from "@/lib/projectPreset";
 
 type Project = {
   id: number;
@@ -55,6 +58,19 @@ type CustomSubtitlePreset = {
   font: "Noto Sans Thai" | "Arial" | "Inter";
   size: "small" | "medium" | "large";
   position: "bottom" | "middle" | "top";
+};
+
+type TimelineSnapshot = {
+  clipIds: number[];
+  trims: Array<{ clipId: number; trimStartMs: number | null; trimEndMs: number | null }>;
+};
+
+type SilencePreview = {
+  hasAudio: boolean;
+  sourceDurationMs: number;
+  timelineDurationMs: number;
+  removedDurationMs: number;
+  silenceRanges: Array<{ startMs: number; endMs: number; durationMs: number }>;
 };
 
 const prompts = ["ตัดช่วงเงียบทั้งหมด", "สร้างซับไตเติลอัตโนมัติ", "Crop video to 16:9", "Keep the first 30 seconds"];
@@ -117,7 +133,11 @@ export default function Home() {
   const [newPresetName, setNewPresetName] = useState("");
   const [selectedCustomPresetId, setSelectedCustomPresetId] = useState<number | null>(null);
   const [customPresetDirty, setCustomPresetDirty] = useState(false);
+  const [timelineHistory, setTimelineHistory] = useState<TimelineSnapshot[]>([]);
+  const [timelineRedoHistory, setTimelineRedoHistory] = useState<TimelineSnapshot[]>([]);
+  const [silencePreview, setSilencePreview] = useState<SilencePreview | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const projectPresetInputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const projectsQuery = trpc.video.listProjects.useQuery();
   const searchedProjectsQuery = trpc.video.listProjects.useQuery({ search: projectSearch.trim() || undefined }, { enabled: isProjectLibraryOpen });
@@ -135,6 +155,7 @@ export default function Home() {
   const renameProject = trpc.video.renameProject.useMutation();
   const setClipTrim = trpc.video.setClipTrim.useMutation();
   const duplicateProject = trpc.video.duplicateProject.useMutation();
+  const previewClipSilences = trpc.video.previewClipSilences.useMutation();
   const customPresetsQuery = trpc.video.listCustomSubtitlePresets.useQuery();
   const createCustomSubtitlePreset = trpc.video.createCustomSubtitlePreset.useMutation();
   const updateCustomSubtitlePreset = trpc.video.updateCustomSubtitlePreset.useMutation();
@@ -165,6 +186,15 @@ export default function Home() {
     setPreviewDurationMs(0);
     setTrimStartMs(selectedClip?.trimStartMs ?? 0);
     setTrimEndMs(selectedClip?.trimEndMs ?? 0);
+  }, [selectedClip?.id, selectedClip?.trimStartMs, selectedClip?.trimEndMs]);
+
+  useEffect(() => {
+    setTimelineHistory([]);
+    setTimelineRedoHistory([]);
+  }, [project?.id]);
+
+  useEffect(() => {
+    setSilencePreview(null);
   }, [selectedClip?.id, selectedClip?.trimStartMs, selectedClip?.trimEndMs]);
 
   useEffect(() => {
@@ -205,6 +235,138 @@ export default function Home() {
       utils.video.listJobs.invalidate(),
       utils.video.listCustomSubtitlePresets.invalidate(),
     ]);
+  }
+
+  function captureTimeline(sourceClips: Clip[] = clips): TimelineSnapshot {
+    return {
+      clipIds: sourceClips.map(clip => clip.id),
+      trims: sourceClips.map(clip => ({ clipId: clip.id, trimStartMs: clip.trimStartMs ?? null, trimEndMs: clip.trimEndMs ?? null })),
+    };
+  }
+
+  function rememberTimelineChange(snapshot: TimelineSnapshot) {
+    setTimelineHistory(history => [...history.slice(-19), snapshot]);
+    setTimelineRedoHistory([]);
+  }
+
+  async function restoreTimeline(snapshot: TimelineSnapshot) {
+    if (!project) throw new Error("Video project was not found");
+    const current = captureTimeline(await utils.video.listClips.fetch({ projectId: project.id }) as Clip[]);
+    const hasSameOrder = current.clipIds.length === snapshot.clipIds.length && current.clipIds.every((clipId, index) => clipId === snapshot.clipIds[index]);
+    if (!hasSameOrder) await reorderClips.mutateAsync({ projectId: project.id, clipIds: snapshot.clipIds });
+    for (const savedTrim of snapshot.trims) {
+      const currentTrim = current.trims.find(trim => trim.clipId === savedTrim.clipId);
+      if (!currentTrim || currentTrim.trimStartMs !== savedTrim.trimStartMs || currentTrim.trimEndMs !== savedTrim.trimEndMs) {
+        await setClipTrim.mutateAsync({ projectId: project.id, ...savedTrim });
+      }
+    }
+    await utils.video.listClips.invalidate({ projectId: project.id });
+    return current;
+  }
+
+  async function undoTimeline() {
+    const previous = timelineHistory.at(-1);
+    if (!previous) return;
+    try {
+      const current = await restoreTimeline(previous);
+      setTimelineHistory(history => history.slice(0, -1));
+      setTimelineRedoHistory(history => [...history.slice(-19), current]);
+      toast.success("ย้อนการเปลี่ยนแปลง timeline แล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถย้อน timeline ได้");
+    }
+  }
+
+  async function redoTimeline() {
+    const next = timelineRedoHistory.at(-1);
+    if (!next) return;
+    try {
+      const current = await restoreTimeline(next);
+      setTimelineRedoHistory(history => history.slice(0, -1));
+      setTimelineHistory(history => [...history.slice(-19), current]);
+      toast.success("ทำซ้ำการเปลี่ยนแปลง timeline แล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถทำซ้ำ timeline ได้");
+    }
+  }
+
+  async function loadSilencePreview() {
+    if (!project || !selectedClip) return;
+    try {
+      const preview = await previewClipSilences.mutateAsync({ projectId: project.id, clipId: selectedClip.id });
+      setSilencePreview(preview);
+      if (!preview.hasAudio) toast.info("คลิปนี้ไม่มีแทร็กเสียงให้ตรวจช่วงเงียบ");
+      else toast.success(preview.silenceRanges.length ? `พบช่วงเงียบ ${preview.silenceRanges.length} ช่วง` : "ไม่พบช่วงเงียบตามเกณฑ์ที่ตั้งไว้");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถตรวจช่วงเงียบได้");
+    }
+  }
+
+  function exportProjectPreset() {
+    if (!project || !clips.length) return;
+    const occurrences = new Map<string, number>();
+    const preset = buildProjectPreset({
+      command,
+      subtitleStyle,
+      clips: clips.map(clip => {
+        const occurrence = (occurrences.get(clip.originalName) ?? 0) + 1;
+        occurrences.set(clip.originalName, occurrence);
+        return { sourceName: clip.originalName, occurrence, trimStartMs: clip.trimStartMs ?? null, trimEndMs: clip.trimEndMs ?? null };
+      }),
+    });
+    const blob = new Blob([JSON.stringify(preset, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${project.title.trim().replace(/[^a-z0-9ก-๙_-]+/gi, "-").replace(/^-|-$/g, "") || "cineflow"}-preset.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+    toast.success("ส่งออก preset โครงการแล้ว — ไฟล์วิดีโอไม่ได้รวมอยู่ในไฟล์นี้");
+  }
+
+  async function importProjectPreset(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!project || !file) return;
+    if (file.size > 100 * 1024) {
+      toast.error("ไฟล์ preset ต้องมีขนาดไม่เกิน 100 KB");
+      return;
+    }
+    try {
+      const preset = parseProjectPreset(JSON.parse(await file.text()));
+      if (preset.clips.length !== clips.length) throw new Error("จำนวนคลิปไม่ตรงกับโครงการที่เปิดอยู่");
+      const clipsByName = new Map<string, Clip[]>();
+      for (const clip of clips) clipsByName.set(clip.originalName, [...(clipsByName.get(clip.originalName) ?? []), clip]);
+      const resolvedClips = preset.clips.map(saved => {
+        const match = clipsByName.get(saved.sourceName)?.[saved.occurrence - 1];
+        if (!match) throw new Error(`ไม่พบคลิป “${saved.sourceName}” ในลำดับที่ preset ระบุ`);
+        return { clip: match, trimStartMs: saved.trimStartMs, trimEndMs: saved.trimEndMs };
+      });
+      if (!window.confirm("นำ preset นี้มาใช้กับคำสั่ง รูปแบบซับ ลำดับคลิป และจุด trim ของโครงการปัจจุบันหรือไม่?")) return;
+      const before = captureTimeline();
+      const nextOrder = resolvedClips.map(item => item.clip.id);
+      const orderChanged = nextOrder.some((clipId, index) => clips[index]?.id !== clipId);
+      if (orderChanged) await reorderClips.mutateAsync({ projectId: project.id, clipIds: nextOrder });
+      for (const saved of resolvedClips) {
+        const current = clips.find(clip => clip.id === saved.clip.id);
+        if (current && ((current.trimStartMs ?? null) !== saved.trimStartMs || (current.trimEndMs ?? null) !== saved.trimEndMs)) {
+          await setClipTrim.mutateAsync({ projectId: project.id, clipId: saved.clip.id, trimStartMs: saved.trimStartMs, trimEndMs: saved.trimEndMs });
+        }
+      }
+      setCommand(preset.command);
+      setSubtitlePreset("custom");
+      setSubtitleStyle(preset.subtitleStyle);
+      setSelectedCustomPresetId(null);
+      setNewPresetName("");
+      setCustomPresetDirty(false);
+      await utils.video.listClips.invalidate({ projectId: project.id });
+      rememberTimelineChange(before);
+      toast.success("นำ preset โครงการมาใช้แล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไฟล์ preset ไม่ถูกต้อง");
+    }
   }
 
   async function uploadVideo(file: File) {
@@ -294,9 +456,11 @@ export default function Home() {
     if (index < 0 || nextIndex < 0 || nextIndex >= clips.length) return;
     const orderedIds = clips.map(clip => clip.id);
     [orderedIds[index], orderedIds[nextIndex]] = [orderedIds[nextIndex], orderedIds[index]];
+    const before = captureTimeline();
     try {
       await reorderClips.mutateAsync({ projectId: project.id, clipIds: orderedIds });
       await utils.video.listClips.invalidate({ projectId: project.id });
+      rememberTimelineChange(before);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "ไม่สามารถเปลี่ยนลำดับคลิปได้");
     }
@@ -347,9 +511,11 @@ export default function Home() {
       toast.error("จุดสิ้นสุดต้องอยู่หลังจุดเริ่มต้น");
       return;
     }
+    const before = captureTimeline();
     try {
       await setClipTrim.mutateAsync({ projectId: project.id, clipId: selectedClip.id, trimStartMs, trimEndMs: normalizedEnd });
       await utils.video.listClips.invalidate({ projectId: project.id });
+      if (selectedClip.trimStartMs !== trimStartMs || selectedClip.trimEndMs !== normalizedEnd) rememberTimelineChange(before);
       toast.success("บันทึกช่วงคลิปสำหรับงานถัดไปแล้ว");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "บันทึกช่วงคลิปไม่สำเร็จ");
@@ -454,6 +620,10 @@ export default function Home() {
           <div><p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[#53766a]"><span className="size-1.5 rounded-full bg-[#a5d83d]" /> AI-powered editing</p><h1 className="font-display text-3xl font-semibold tracking-[-0.055em] sm:text-[40px]">Make the cut. <span className="text-[#789c55]">Say the word.</span></h1><p className="mt-2 max-w-xl text-sm leading-6 text-[#67726e]">อัปโหลดคลิปสั้นหลายรายการ จัดลำดับ แล้วบอกสิ่งที่ต้องการด้วยภาษาไทยหรือ English. เราจะรวมเป็นไทม์ไลน์เดียวและทำตามคำสั่งที่ตรวจสอบได้</p><p className="mt-2 text-[11px] font-medium text-[#78827c]">เริ่มได้ทันที ไม่ต้อง Sign in — งานของคุณผูกกับเบราว์เซอร์นี้</p></div>
           <div className="flex items-center gap-3 rounded-2xl border border-[#e3e4df] bg-[#fbfaf8] px-4 py-3"><div className="grid size-8 place-items-center rounded-lg bg-[#eef6d9] text-[#6c9131]"><Sparkles size={15} /></div><div><p className="text-xs font-semibold">Thai + English commands</p><p className="text-[11px] text-[#7a8580]">multi-clip timelines</p></div></div>
         </section>
+
+        {project && <section className="mb-5 rounded-2xl border border-[#dce5d5] bg-[#f8fbf4] px-4 py-3 shadow-[0_12px_36px_rgba(31,43,37,.04)]"><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-3"><div className="grid size-8 place-items-center rounded-lg bg-[#e8f3d8] text-[#597d3b]"><Clock3 size={15} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Timeline tools</p><p className="text-[11px] text-[#6e7c73]">Undo/redo ใช้กับการเรียงคลิปและช่วง trim ที่บันทึกแล้ว</p></div></div><div className="flex flex-wrap items-center gap-2"><button aria-label="Undo timeline" onClick={() => void undoTimeline()} disabled={!timelineHistory.length || reorderClips.isPending || setClipTrim.isPending} className="inline-flex items-center gap-1.5 rounded-lg border border-[#d3e0ca] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#456145] transition hover:bg-[#eef6e7] disabled:cursor-not-allowed disabled:opacity-35"><RotateCcw size={13} /> Undo</button><button aria-label="Redo timeline" onClick={() => void redoTimeline()} disabled={!timelineRedoHistory.length || reorderClips.isPending || setClipTrim.isPending} className="inline-flex items-center gap-1.5 rounded-lg border border-[#d3e0ca] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#456145] transition hover:bg-[#eef6e7] disabled:cursor-not-allowed disabled:opacity-35"><RotateCw size={13} /> Redo</button>{selectedClip && <button aria-label="Preview silence" onClick={() => void loadSilencePreview()} disabled={previewClipSilences.isPending} className="inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-1.5 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-50">{previewClipSilences.isPending ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />} Preview silence</button>}</div></div>{selectedClip && <div className="mt-3 rounded-xl border border-[#e0e7d9] bg-white px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[10px] font-semibold text-[#50694d]">{silencePreview ? silencePreview.hasAudio ? silencePreview.silenceRanges.length ? `พบ ${silencePreview.silenceRanges.length} ช่วงเงียบ — จะลบประมาณ ${(silencePreview.removedDurationMs / 1000).toFixed(1)} วินาที` : "ไม่พบช่วงเงียบตามเกณฑ์ของ Cineflow" : "คลิปนี้ไม่มีแทร็กเสียง" : "กด Preview silence เพื่อตรวจช่วงที่คำสั่ง “ตัดช่วงเงียบ” จะลบก่อน render"}</p>{silencePreview?.hasAudio && silencePreview.silenceRanges.length > 0 && <span className="text-[9px] font-medium text-[#88734b]">Preview only · ไฟล์ยังไม่ถูกเปลี่ยน</span>}</div>{silencePreview?.hasAudio && silencePreview.silenceRanges.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{silencePreview.silenceRanges.slice(0, 5).map(silence => <span key={`${silence.startMs}-${silence.endMs}`} className="rounded-full bg-amber-50 px-2 py-1 text-[9px] font-medium text-[#856b37]">{(silence.startMs / 1000).toFixed(1)}–{(silence.endMs / 1000).toFixed(1)}s</span>)}{silencePreview.silenceRanges.length > 5 && <span className="rounded-full bg-stone-100 px-2 py-1 text-[9px] font-medium text-[#758078]">+{silencePreview.silenceRanges.length - 5} ช่วง</span>}</div>}</div>}</section>}
+
+        {project && <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-[#dce5d5] bg-white px-4 py-3 shadow-[0_12px_36px_rgba(31,43,37,.04)] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Project preset</p><p className="mt-0.5 text-[11px] leading-4 text-[#6e7c73]">บันทึกคำสั่ง รูปแบบซับ ลำดับคลิป และ trim ไว้ใช้กับชุดคลิปชื่อเดิม โดยไม่ส่งออกวิดีโอหรือ URL</p></div><div className="flex shrink-0 items-center gap-2"><input ref={projectPresetInputRef} aria-label="Import project preset" type="file" accept="application/json,.json" onChange={event => void importProjectPreset(event)} className="hidden" /><button onClick={() => projectPresetInputRef.current?.click()} disabled={reorderClips.isPending || setClipTrim.isPending} className="rounded-lg border border-[#d3e0ca] bg-[#f8fbf4] px-3 py-2 text-[10px] font-semibold text-[#496a4b] transition hover:bg-[#edf6e4] disabled:opacity-40">Import preset</button><button onClick={exportProjectPreset} disabled={!clips.length} className="inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-40"><Download size={12} /> Export preset</button></div></section>}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_390px]">
           <section className="overflow-hidden rounded-[24px] border border-[#dfdfd9] bg-[#1b2421] shadow-[0_20px_60px_rgba(31,43,37,.08)]">

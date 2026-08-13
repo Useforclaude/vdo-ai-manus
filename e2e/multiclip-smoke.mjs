@@ -9,7 +9,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 
 try {
   await page.goto(baseUrl, { waitUntil: "networkidle" });
-  const fileInput = page.locator('input[type="file"]');
+  const fileInput = page.locator('input[type="file"][accept="video/*"]');
 
   await fileInput.setInputFiles(firstClip);
   await page.getByText(/1\. clip-one\.mp4/).waitFor({ state: "visible", timeout: 20_000 });
@@ -21,6 +21,9 @@ try {
   const previewUrl = await page.locator("video").getAttribute("src");
   if (!previewUrl?.includes("clip-two")) throw new Error("Selected-clip preview did not switch to the second clip");
   await page.getByText("AUDIO WAVEFORM", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  const silencePreviewed = page.waitForResponse(response => response.url().includes("video.previewClipSilences") && response.ok(), { timeout: 30_000 });
+  await page.getByRole("button", { name: "Preview silence" }).click();
+  await silencePreviewed;
 
   await page.getByRole("button", { name: "Move clip up" }).nth(1).click();
   await page.getByText(/1\. clip-two\.mp4/).waitFor({ state: "visible", timeout: 10_000 });
@@ -47,6 +50,14 @@ try {
   const trimSaved = page.waitForResponse(response => response.url().includes("video.setClipTrim") && response.ok(), { timeout: 10_000 });
   await page.getByRole("button", { name: "Save trim" }).click();
   await trimSaved;
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Undo timeline"]')?.hasAttribute("disabled"), { timeout: 10_000 });
+  const trimUndone = page.waitForResponse(response => response.url().includes("video.setClipTrim") && response.ok(), { timeout: 10_000 });
+  await page.getByLabel("Undo timeline").click();
+  await trimUndone;
+  await page.waitForFunction(() => !document.querySelector('[aria-label="Redo timeline"]')?.hasAttribute("disabled"), { timeout: 10_000 });
+  const trimRedone = page.waitForResponse(response => response.url().includes("video.setClipTrim") && response.ok(), { timeout: 10_000 });
+  await page.getByLabel("Redo timeline").click();
+  await trimRedone;
 
   const projectName = page.getByRole("textbox", { name: "Project name" });
   await projectName.fill("E2E Timeline Studio");
@@ -68,6 +79,15 @@ try {
   await library.getByText("Copy of E2E Timeline Studio", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
   await library.getByRole("button", { name: /Copy of E2E Timeline Studio/ }).click();
   await library.waitFor({ state: "hidden", timeout: 10_000 });
+
+  const presetDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export preset" }).click();
+  const exportedPreset = await presetDownload;
+  const exportedPresetPath = await exportedPreset.path();
+  if (!exportedPresetPath) throw new Error("Project preset export did not create a local download");
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByLabel("Import project preset").setInputFiles(exportedPresetPath);
+  await page.getByText("นำ preset โครงการมาใช้แล้ว").waitFor({ state: "visible", timeout: 10_000 });
 
   const command = page.locator("textarea");
   await command.fill("Create subtitles");
@@ -92,7 +112,7 @@ try {
   console.log(JSON.stringify({
     status: "passed",
     previewUrl,
-    checks: ["two uploads", "selected preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim", "project rename and library open", "project duplication", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
+    checks: ["two uploads", "selected preview", "silence preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim with undo/redo", "project rename and library open", "project duplication", "project preset export/import", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
   }));
 } finally {
   await browser.close();

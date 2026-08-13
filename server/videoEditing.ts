@@ -221,6 +221,49 @@ async function findKeepIntervals(inputPath: string, duration: number) {
   return intervals.length ? intervals : [[0, duration] as [number, number]];
 }
 
+export type SilencePreview = {
+  hasAudio: boolean;
+  sourceDurationMs: number;
+  timelineDurationMs: number;
+  removedDurationMs: number;
+  silenceRanges: Array<{ startMs: number; endMs: number; durationMs: number }>;
+};
+
+export async function previewClipSilences(storageKey: string, trimStartMs?: number | null, trimEndMs?: number | null): Promise<SilencePreview> {
+  const workspace = await fs.mkdtemp(path.join(tmpdir(), "vdo-silence-preview-"));
+  const sourcePath = path.join(workspace, "clip.source");
+  const timelinePath = path.join(workspace, "clip.timeline.mp4");
+  try {
+    await downloadToFile(await storageGetSignedUrl(storageKey), sourcePath);
+    const sourceDurationSeconds = await probeDuration(sourcePath);
+    const range = clipTrimRange(sourceDurationSeconds, trimStartMs, trimEndMs);
+    await trimClipToRange(sourcePath, timelinePath, range);
+    const timelineDurationSeconds = await probeDuration(timelinePath);
+    const base = {
+      sourceDurationMs: Math.round(sourceDurationSeconds * 1000),
+      timelineDurationMs: Math.round(timelineDurationSeconds * 1000),
+    };
+    if (!await hasAudioTrack(timelinePath)) return { hasAudio: false, ...base, removedDurationMs: 0, silenceRanges: [] };
+
+    const keepIntervals = await findKeepIntervals(timelinePath, timelineDurationSeconds);
+    const silenceRanges: SilencePreview["silenceRanges"] = [];
+    let cursor = 0;
+    for (const [start, end] of keepIntervals) {
+      if (start - cursor > 0.001) {
+        silenceRanges.push({ startMs: Math.round(cursor * 1000), endMs: Math.round(start * 1000), durationMs: Math.round((start - cursor) * 1000) });
+      }
+      cursor = Math.max(cursor, end);
+    }
+    if (timelineDurationSeconds - cursor > 0.001) {
+      silenceRanges.push({ startMs: Math.round(cursor * 1000), endMs: Math.round(timelineDurationSeconds * 1000), durationMs: Math.round((timelineDurationSeconds - cursor) * 1000) });
+    }
+    const removedDurationMs = silenceRanges.reduce((total, silence) => total + silence.durationMs, 0);
+    return { hasAudio: true, ...base, removedDurationMs, silenceRanges };
+  } finally {
+    await fs.rm(workspace, { recursive: true, force: true });
+  }
+}
+
 function srtTime(seconds: number) {
   const totalMs = Math.max(0, Math.round(seconds * 1000));
   const ms = totalMs % 1000;

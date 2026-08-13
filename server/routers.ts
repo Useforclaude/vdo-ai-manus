@@ -4,7 +4,7 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
-import { createJobId, interpretVideoCommand } from "./videoEditing";
+import { createJobId, interpretVideoCommand, previewClipSilences } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 import { subtitleStyleForPreset } from "@shared/subtitles";
 
@@ -45,6 +45,19 @@ export const appRouter = router({
       const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
       if (!project) throw new Error("Video project was not found");
       return db.listVideoClips(project.id, actor.userId);
+    }),
+    previewClipSilences: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      clipId: z.number().int().positive(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
+      if (!project) throw new Error("Video project was not found");
+      const clips = await db.listVideoClips(project.id, actor.userId);
+      const clip = clips.find(item => item.id === input.clipId);
+      if (!clip) throw new Error("Video clip was not found");
+      return previewClipSilences(clip.storageKey, clip.trimStartMs, clip.trimEndMs);
     }),
     listCustomSubtitlePresets: publicProcedure.query(async ({ ctx }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   listProjectsForUser: vi.fn(),
   listSubtitlePresetsForUser: vi.fn(),
   listVideoClips: vi.fn(),
+  previewClipSilences: vi.fn(),
   listEditJobsForUser: vi.fn(),
   renameVideoProject: vi.fn(),
   reorderVideoClips: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("./db", () => ({
 vi.mock("./videoEditing", () => ({
   createJobId: () => "job_test_001",
   interpretVideoCommand: mocks.interpretVideoCommand,
+  previewClipSilences: mocks.previewClipSilences,
 }));
 
 vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
@@ -162,6 +164,29 @@ describe("video router", () => {
 
     await expect(caller.video.setClipTrim({ projectId: 55, clipId: 9, trimStartMs: 500, trimEndMs: 2500 })).resolves.toMatchObject({ id: 9, trimStartMs: 500, trimEndMs: 2500 });
     expect(mocks.updateVideoClipTrim).toHaveBeenCalledWith(55, 9, 101, 500, 2500);
+  });
+
+  it("previews silence only for a clip owned by the current guest project", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 55, userId: 101 });
+    mocks.listVideoClips.mockResolvedValue([{ id: 9, projectId: 55, storageKey: "users/101/clip.mp4", trimStartMs: 500, trimEndMs: 2500 }]);
+    mocks.previewClipSilences.mockResolvedValue({ hasAudio: true, sourceDurationMs: 3000, timelineDurationMs: 2000, removedDurationMs: 800, silenceRanges: [{ startMs: 500, endMs: 1300, durationMs: 800 }] });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.previewClipSilences({ projectId: 55, clipId: 9 })).resolves.toMatchObject({ removedDurationMs: 800, silenceRanges: [{ durationMs: 800 }] });
+    expect(mocks.getVideoProjectForUser).toHaveBeenCalledWith(55, 101);
+    expect(mocks.listVideoClips).toHaveBeenCalledWith(55, 101);
+    expect(mocks.previewClipSilences).toHaveBeenCalledWith("users/101/clip.mp4", 500, 2500);
+  });
+
+  it("does not preview silence for a clip missing from the current guest project", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 55, userId: 101 });
+    mocks.listVideoClips.mockResolvedValue([]);
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.previewClipSilences({ projectId: 55, clipId: 9 })).rejects.toThrow("Video clip was not found");
+    expect(mocks.previewClipSilences).not.toHaveBeenCalled();
   });
 
   it("searches and renames only projects owned by the current guest", async () => {

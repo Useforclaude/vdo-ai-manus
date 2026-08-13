@@ -67,3 +67,7 @@
 - [x] เพิ่ม waveform และตัวควบคุม timeline เพื่อช่วยเลือกช่วงตัดด้วยสายตา
 - [x] เพิ่มปุ่ม duplicate project และหน้าจอสร้าง แก้ไข เลือก หรือลบ preset ซับส่วนตัว
 - [x] เพิ่ม Vitest และ browser E2E ครอบคลุม waveform preset ส่วนตัว และการทำสำเนาโปรเจกต์
+- [x] เพิ่ม undo/redo สำหรับการเปลี่ยนแปลง timeline ของโปรเจกต์ที่กำลังแก้ไข
+- [x] เพิ่ม preview ช่วงเงียบจากเสียงคลิปก่อนส่งงาน FFmpeg render
+- [x] เพิ่ม export/import preset ของโปรเจกต์เพื่อเรียกใช้รูปแบบตัดต่อซ้ำอย่างปลอดภัย
+- [x] เพิ่ม Vitest และ browser E2E สำหรับ undo/redo, preview ช่วงเงียบ และ export/import preset
