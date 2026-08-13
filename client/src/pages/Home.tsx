@@ -10,17 +10,23 @@ import {
   Download,
   FileVideo2,
   Film,
+  FolderOpen,
   Languages,
   Loader2,
+  PencilLine,
   Play,
   Plus,
+  Save,
   Scissors,
+  Search,
   Sparkles,
   Trash2,
   UploadCloud,
   WandSparkles,
+  X,
 } from "lucide-react";
 import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
 
 type Project = {
   id: number;
@@ -37,6 +43,8 @@ type Clip = {
   originalName: string;
   storageUrl: string;
   sizeBytes: number;
+  trimStartMs?: number | null;
+  trimEndMs?: number | null;
 };
 
 const prompts = ["ตัดช่วงเงียบทั้งหมด", "สร้างซับไตเติลอัตโนมัติ", "Crop video to 16:9", "Keep the first 30 seconds"];
@@ -81,6 +89,13 @@ export default function Home() {
   const [command, setCommand] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isProjectLibraryOpen, setIsProjectLibraryOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectTitleDraft, setProjectTitleDraft] = useState("");
+  const [previewDurationMs, setPreviewDurationMs] = useState(0);
+  const [trimStartMs, setTrimStartMs] = useState(0);
+  const [trimEndMs, setTrimEndMs] = useState(0);
+  const [subtitlePreset, setSubtitlePreset] = useState<SubtitlePresetId>("thai_standard");
   const [subtitleStyle, setSubtitleStyle] = useState<{
     font: "Noto Sans Thai" | "Arial" | "Inter";
     size: "small" | "medium" | "large";
@@ -89,6 +104,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const projectsQuery = trpc.video.listProjects.useQuery();
+  const searchedProjectsQuery = trpc.video.listProjects.useQuery({ search: projectSearch.trim() || undefined }, { enabled: isProjectLibraryOpen });
   const project = useMemo(() => (projectsQuery.data ?? []).find(item => item.id === selectedProjectId) as Project | undefined, [projectsQuery.data, selectedProjectId]);
   const clipsQuery = trpc.video.listClips.useQuery({ projectId: selectedProjectId ?? 0 }, { enabled: Boolean(selectedProjectId) });
   const jobsQuery = trpc.video.listJobs.useQuery(undefined, {
@@ -100,8 +116,11 @@ export default function Home() {
   const deleteProject = trpc.video.deleteProject.useMutation();
   const deleteJob = trpc.video.deleteJob.useMutation();
   const setRetention = trpc.video.setProjectRetention.useMutation();
+  const renameProject = trpc.video.renameProject.useMutation();
+  const setClipTrim = trpc.video.setClipTrim.useMutation();
   const clips = clipsQuery.data ?? [];
   const selectedClip = clips.find(clip => clip.id === selectedClipId);
+  const editableDurationMs = Math.max(1_000, Math.min(180_000, Math.round(previewDurationMs || selectedClip?.trimEndMs || 180_000)));
   const previewUrl = temporaryPreview || selectedClip?.storageUrl || "";
   const recentJobs = useMemo(() => jobsQuery.data?.slice(0, 6) ?? [], [jobsQuery.data]);
   const activeJob = useMemo(() => recentJobs.find(job => job.status === "queued" || job.status === "processing"), [recentJobs]);
@@ -119,6 +138,16 @@ export default function Home() {
   useEffect(() => {
     if (!clips.some(clip => clip.id === selectedClipId)) setSelectedClipId(clips[0]?.id ?? null);
   }, [clips, selectedClipId]);
+
+  useEffect(() => {
+    setPreviewDurationMs(0);
+    setTrimStartMs(selectedClip?.trimStartMs ?? 0);
+    setTrimEndMs(selectedClip?.trimEndMs ?? 0);
+  }, [selectedClip?.id, selectedClip?.trimStartMs, selectedClip?.trimEndMs]);
+
+  useEffect(() => {
+    setProjectTitleDraft(project?.title ?? "");
+  }, [project?.id, project?.title]);
 
   useEffect(() => () => {
     if (temporaryPreview.startsWith("blob:")) URL.revokeObjectURL(temporaryPreview);
@@ -185,7 +214,7 @@ export default function Home() {
     }
     if (!command.trim()) return;
     try {
-      const job = await createJob.mutateAsync({ projectId: project.id, command, subtitleStyle });
+      const job = await createJob.mutateAsync({ projectId: project.id, command, subtitleStyle, subtitlePreset });
       setCommand("");
       await utils.video.listJobs.invalidate();
       toast.success("วิเคราะห์คำสั่งแล้ว กำลังเริ่มงานตัดต่อ");
@@ -246,12 +275,44 @@ export default function Home() {
     }
   }
 
+  async function saveClipTrim() {
+    if (!project || !selectedClip) return;
+    const normalizedEnd = trimEndMs || editableDurationMs;
+    if (normalizedEnd <= trimStartMs) {
+      toast.error("จุดสิ้นสุดต้องอยู่หลังจุดเริ่มต้น");
+      return;
+    }
+    try {
+      await setClipTrim.mutateAsync({ projectId: project.id, clipId: selectedClip.id, trimStartMs, trimEndMs: normalizedEnd });
+      await utils.video.listClips.invalidate({ projectId: project.id });
+      toast.success("บันทึกช่วงคลิปสำหรับงานถัดไปแล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "บันทึกช่วงคลิปไม่สำเร็จ");
+    }
+  }
+
+  async function saveProjectTitle() {
+    if (!project || !projectTitleDraft.trim()) return;
+    try {
+      await renameProject.mutateAsync({ projectId: project.id, title: projectTitleDraft.trim() });
+      await utils.video.listProjects.invalidate();
+      toast.success("เปลี่ยนชื่อโปรเจกต์แล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "เปลี่ยนชื่อโปรเจกต์ไม่สำเร็จ");
+    }
+  }
+
+  function chooseSubtitlePreset(preset: SubtitlePresetId) {
+    setSubtitlePreset(preset);
+    if (preset !== "custom") setSubtitleStyle(SUBTITLE_PRESETS[preset].style);
+  }
+
   return (
     <div className="min-h-screen bg-[#f6f5f2] text-[#17201e]">
       <header className="border-b border-[#e7e4de] bg-[#fbfaf8]/90 backdrop-blur-xl">
         <div className="mx-auto flex h-[76px] max-w-[1440px] items-center justify-between px-5 lg:px-10">
           <div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-[#152b27] text-[#c5f165] shadow-[0_8px_22px_rgba(21,43,39,.18)]"><Film size={19} strokeWidth={1.8} /></div><div><p className="font-display text-[17px] font-semibold tracking-[-0.04em]">Cineflow</p><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#77827f]">AI VIDEO STUDIO</p></div></div>
-          <div className="hidden items-center gap-8 text-[13px] font-medium text-[#66716d] md:flex"><span className="text-[#18211f]">Editor</span><span>Clip library</span><span>Help</span></div>
+          <div className="hidden items-center gap-8 text-[13px] font-medium text-[#66716d] md:flex"><span className="text-[#18211f]">Editor</span><button onClick={() => setIsProjectLibraryOpen(true)} className="transition hover:text-[#18211f]">Clip library</button><span>Help</span></div>
           <div className="flex items-center gap-2 rounded-full border border-[#dfe5d9] bg-[#f3f8e8] px-3 py-2 text-[11px] font-semibold text-[#496935]"><span className="size-1.5 rounded-full bg-[#91bf3b]" /> Ready to edit</div>
         </div>
       </header>
@@ -266,7 +327,7 @@ export default function Home() {
           <section className="overflow-hidden rounded-[24px] border border-[#dfdfd9] bg-[#1b2421] shadow-[0_20px_60px_rgba(31,43,37,.08)]">
             <div className="flex h-14 items-center justify-between border-b border-white/10 px-5 text-white"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#c4ef55]" /><span className="text-xs font-semibold">Timeline preview</span></div><span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-medium text-white/70">{clips.length} / 12 clips</span></div>
             <div className="relative aspect-video bg-[radial-gradient(circle_at_42%_30%,#405e50_0%,#25372f_35%,#141c19_78%)]">
-              {previewUrl ? <video controls className="size-full object-contain" src={previewUrl} /> : <div className="absolute inset-0 grid place-items-center"><div className="text-center text-white"><div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white/10 text-[#d0ef91]"><Play size={22} fill="currentColor" /></div><p className="text-sm font-medium">Your preview will appear here</p><p className="mt-1 text-xs text-white/55">Add up to 12 short clips</p></div></div>}
+              {previewUrl ? <video controls onLoadedMetadata={event => setPreviewDurationMs(Math.round(event.currentTarget.duration * 1000))} className="size-full object-contain" src={previewUrl} /> : <div className="absolute inset-0 grid place-items-center"><div className="text-center text-white"><div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white/10 text-[#d0ef91]"><Play size={22} fill="currentColor" /></div><p className="text-sm font-medium">Your preview will appear here</p><p className="mt-1 text-xs text-white/55">Add up to 12 short clips</p></div></div>}
               {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] backdrop-blur-sm"><div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely</p><p className="mt-1 text-[11px] text-[#68736f]">Saving to this browser session</p></div></div>}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1b2421] px-5 py-4"><div className="flex items-center gap-3 text-xs text-white/65"><FileVideo2 size={15} className="text-[#b9e65c]" /><span className="max-w-[360px] truncate">{selectedClip?.originalName || "No clip selected"}</span></div>{project && <button onClick={() => void deleteCurrentProject()} className="flex items-center gap-1.5 text-[11px] font-medium text-white/55 transition hover:text-white"><Trash2 size={14} /> Delete project</button>}</div>
@@ -278,7 +339,9 @@ export default function Home() {
               <div><div className="mx-auto mb-3 grid size-11 place-items-center rounded-xl bg-white text-[#6d9846] shadow-sm transition group-hover:-translate-y-0.5"><Plus size={19} /></div><p className="text-sm font-semibold">{project ? "Add another clip" : "Drop first video here"}</p><p className="mt-1 text-[11px] leading-5 text-[#74807b]">MP4, MOV, WebM and more<br />Maximum 180 MB for the assembled project</p></div>
             </button>
             <input ref={inputRef} className="hidden" type="file" accept="video/*" onChange={onFileChange} />
-            <div className="mt-4 max-h-[220px] space-y-2 overflow-y-auto pr-1">{clips.length ? clips.map((clip, index) => <div key={clip.id} className={`flex items-center gap-2 rounded-xl border p-2 transition ${clip.id === selectedClipId ? "border-[#9fc66d] bg-[#f2f8e9]" : "border-[#e3e6e0] bg-white"}`}><button onClick={() => setSelectedClipId(clip.id)} className="min-w-0 flex-1 text-left"><p className="truncate text-[11px] font-semibold">{index + 1}. {clip.originalName}</p><p className="mt-0.5 text-[10px] text-[#7c8882]">{formatBytes(clip.sizeBytes)}</p></button><div className="flex items-center"><button aria-label="Move clip up" disabled={index === 0 || reorderClips.isPending} onClick={() => void moveClip(clip.id, -1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowUp size={13} /></button><button aria-label="Move clip down" disabled={index === clips.length - 1 || reorderClips.isPending} onClick={() => void moveClip(clip.id, 1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowDown size={13} /></button><button aria-label="Remove clip" disabled={clips.length === 1 || removeClip.isPending} onClick={() => void deleteSelectedClip(clip.id)} className="rounded p-1 text-[#a7605a] hover:bg-rose-50 disabled:opacity-30"><Trash2 size={13} /></button></div></div>) : <p className="rounded-xl border border-dashed border-[#d9ded7] px-4 py-5 text-center text-[11px] text-[#87918c]">เพิ่มคลิปแรกเพื่อเริ่มไทม์ไลน์</p>}</div>
+            {project && <div className="mt-4 rounded-xl border border-[#e4e6e1] bg-white p-2.5"><label className="text-[10px] font-semibold text-[#728078]">PROJECT NAME<div className="mt-1.5 flex gap-2"><input aria-label="Project name" value={projectTitleDraft} maxLength={120} onChange={event => setProjectTitleDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void saveProjectTitle(); }} className="min-w-0 flex-1 rounded-lg border border-[#dce3d8] bg-[#fbfcfa] px-2.5 py-2 text-xs font-medium outline-none focus:border-[#91b85e]" /><button aria-label="Save project name" onClick={() => void saveProjectTitle()} disabled={renameProject.isPending || !projectTitleDraft.trim() || projectTitleDraft.trim() === project.title} className="grid size-8 place-items-center rounded-lg bg-[#eaf3dd] text-[#557b35] transition hover:bg-[#deebcc] disabled:opacity-40">{renameProject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PencilLine size={13} />}</button></div></label></div>}
+            <div className="mt-4 max-h-[220px] space-y-2 overflow-y-auto pr-1">{clips.length ? clips.map((clip, index) => <div key={clip.id} className={`flex items-center gap-2 rounded-xl border p-2 transition ${clip.id === selectedClipId ? "border-[#9fc66d] bg-[#f2f8e9]" : "border-[#e3e6e0] bg-white"}`}><button onClick={() => setSelectedClipId(clip.id)} className="min-w-0 flex-1 text-left"><p className="truncate text-[11px] font-semibold">{index + 1}. {clip.originalName}</p><p className="mt-0.5 text-[10px] text-[#7c8882]">{formatBytes(clip.sizeBytes)} · {clip.trimStartMs || clip.trimEndMs ? "trimmed" : "full clip"}</p></button><div className="flex items-center"><button aria-label="Move clip up" disabled={index === 0 || reorderClips.isPending} onClick={() => void moveClip(clip.id, -1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowUp size={13} /></button><button aria-label="Move clip down" disabled={index === clips.length - 1 || reorderClips.isPending} onClick={() => void moveClip(clip.id, 1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowDown size={13} /></button><button aria-label="Remove clip" disabled={clips.length === 1 || removeClip.isPending} onClick={() => void deleteSelectedClip(clip.id)} className="rounded p-1 text-[#a7605a] hover:bg-rose-50 disabled:opacity-30"><Trash2 size={13} /></button></div></div>) : <p className="rounded-xl border border-dashed border-[#d9ded7] px-4 py-5 text-center text-[11px] text-[#87918c]">เพิ่มคลิปแรกเพื่อเริ่มไทม์ไลน์</p>}</div>
+            {selectedClip && <div className="mt-4 rounded-2xl border border-[#dce6d3] bg-[#f4f8ed] p-3.5"><div className="mb-3 flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Clip timeline</p><p className="mt-0.5 truncate text-[11px] font-semibold text-[#2e4439]">{selectedClip.originalName}</p></div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-[#647b6c]">{(editableDurationMs / 1000).toFixed(1)}s</span></div><div className="space-y-3"><label className="block text-[10px] font-semibold text-[#61736a]">START <span className="float-right font-medium text-[#35593e]">{(trimStartMs / 1000).toFixed(1)}s</span><input aria-label="Clip trim start" type="range" min="0" max={Math.max(0, editableDurationMs - 500)} step="100" value={Math.min(trimStartMs, Math.max(0, editableDurationMs - 500))} onChange={event => setTrimStartMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label><label className="block text-[10px] font-semibold text-[#61736a]">END <span className="float-right font-medium text-[#35593e]">{((trimEndMs || editableDurationMs) / 1000).toFixed(1)}s</span><input aria-label="Clip trim end" type="range" min={Math.min(trimStartMs + 500, editableDurationMs)} max={editableDurationMs} step="100" value={Math.max(Math.min(trimEndMs || editableDurationMs, editableDurationMs), Math.min(trimStartMs + 500, editableDurationMs))} onChange={event => setTrimEndMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label></div><div className="mt-3 flex gap-2"><button onClick={() => void saveClipTrim()} disabled={setClipTrim.isPending} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-50">{setClipTrim.isPending ? <Loader2 className="size-3 animate-spin" /> : <Save size={13} />} Save trim</button><button onClick={() => { setTrimStartMs(0); setTrimEndMs(editableDurationMs); }} className="rounded-lg border border-[#cbdac1] bg-white px-3 py-2 text-[10px] font-semibold text-[#5c7364] transition hover:bg-[#fbfcf9]">Reset</button></div></div>}
             {project && <div className="mt-4 flex items-center justify-between rounded-xl border border-[#e4e6e1] bg-white px-3 py-2"><span className="text-[10px] font-semibold text-[#728078]">File access</span><select value={retentionValue} disabled={setRetention.isPending} onChange={event => { const retention = event.target.value as "seven_days" | "thirty_days" | "keep"; void setRetention.mutateAsync({ projectId: project.id, retention }).then(async () => { await utils.video.listProjects.invalidate(); toast.success(retention === "keep" ? "เก็บไฟล์ไว้จนกว่าจะลบเอง" : "ตั้งอายุการเข้าถึงไฟล์แล้ว"); }).catch(error => toast.error(error instanceof Error ? error.message : "ตั้งอายุไฟล์ไม่สำเร็จ")); }} className="bg-transparent text-[10px] font-semibold text-[#557248] outline-none"><option value="seven_days">Expire in 7 days</option><option value="thirty_days">Expire in 30 days</option><option value="keep">Keep until I delete</option></select></div>}
           </section>
         </div>
@@ -290,7 +353,7 @@ export default function Home() {
             <button disabled={createJob.isPending || !command.trim() || !project} onClick={() => void submitCommand()} className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl bg-[#172e29] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#274b40] disabled:cursor-not-allowed disabled:opacity-45 active:scale-[.97]">{createJob.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Scissors className="size-3.5" />} Create edit <ChevronRight size={14} /></button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">{prompts.map(prompt => <button key={prompt} onClick={() => setCommand(prompt)} className="rounded-full border border-[#dfe4db] bg-white px-3 py-1.5 text-[11px] font-medium text-[#5f6e68] transition hover:border-[#a8c67a] hover:bg-[#f3f8e9]">{prompt}</button>)}</div>
-          {requestsSubtitles && <div className="mt-5 rounded-2xl border border-[#dfe7d7] bg-[#f5f9ef] p-4"><div className="mb-3 flex items-center gap-2 text-[#537644]"><Captions size={15} /><p className="text-xs font-semibold">Subtitle style for this edit</p></div><div className="grid gap-3 sm:grid-cols-3"><label className="text-[10px] font-semibold text-[#6c7971]">FONT<select value={subtitleStyle.font} onChange={event => setSubtitleStyle(current => ({ ...current, font: event.target.value as "Noto Sans Thai" | "Arial" | "Inter" }))} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option>Noto Sans Thai</option><option>Arial</option><option>Inter</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">SIZE<select value={subtitleStyle.size} onChange={event => setSubtitleStyle(current => ({ ...current, size: event.target.value as "small" | "medium" | "large" }))} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">POSITION<select value={subtitleStyle.position} onChange={event => setSubtitleStyle(current => ({ ...current, position: event.target.value as "bottom" | "middle" | "top" }))} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label></div></div>}
+          {requestsSubtitles && <div className="mt-5 rounded-2xl border border-[#dfe7d7] bg-[#f5f9ef] p-4"><div className="mb-3 flex items-center gap-2 text-[#537644]"><Captions size={15} /><p className="text-xs font-semibold">Subtitle style for this edit</p></div><div className="grid gap-2 sm:grid-cols-3">{(Object.entries(SUBTITLE_PRESETS) as [Exclude<SubtitlePresetId, "custom">, (typeof SUBTITLE_PRESETS)[Exclude<SubtitlePresetId, "custom">]][]).map(([id, preset]) => <button key={id} onClick={() => chooseSubtitlePreset(id)} className={`rounded-xl border p-3 text-left transition ${subtitlePreset === id ? "border-[#83ab55] bg-white shadow-sm" : "border-[#dce6d3] bg-white/55 hover:bg-white"}`}><p className="text-[11px] font-bold text-[#385139]">{preset.label}</p><p className="mt-1 text-[10px] leading-4 text-[#718078]">{preset.description}</p></button>)}</div><button onClick={() => chooseSubtitlePreset("custom")} className={`mt-3 text-[10px] font-semibold ${subtitlePreset === "custom" ? "text-[#456d36]" : "text-[#738179] hover:text-[#456d36]"}`}>Customize manually</button><div className="mt-3 grid gap-3 sm:grid-cols-3"><label className="text-[10px] font-semibold text-[#6c7971]">FONT<select value={subtitleStyle.font} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, font: event.target.value as "Noto Sans Thai" | "Arial" | "Inter" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option>Noto Sans Thai</option><option>Arial</option><option>Inter</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">SIZE<select value={subtitleStyle.size} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, size: event.target.value as "small" | "medium" | "large" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">POSITION<select value={subtitleStyle.position} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, position: event.target.value as "bottom" | "middle" | "top" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label></div></div>}
         </section>
 
         <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(290px,.8fr)]">
@@ -298,6 +361,7 @@ export default function Home() {
             {jobsQuery.isLoading ? <div className="grid h-40 place-items-center"><Loader2 className="size-5 animate-spin text-[#799f4d]" /></div> : recentJobs.length ? <div className="space-y-3">{recentJobs.map(job => <article key={job.id} className="rounded-2xl border border-[#e4e5e1] bg-white p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate text-sm font-semibold">{job.command}</p><div className="mt-1.5 flex flex-wrap gap-1.5">{job.operationPlan.operations.map(operation => <span key={`${job.id}-${operation.type}`} className="rounded-md bg-[#f1f6e8] px-1.5 py-0.5 text-[10px] font-medium text-[#658342]">{planLabel(operation.type)}</span>)}</div></div><div className="flex items-center gap-2"><span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-semibold ring-1 ring-inset ${statusClass(job.status)}`}>{statusLabel(job.status)}</span><button aria-label="Delete edit" onClick={() => { if (window.confirm("ลบงานนี้และเพิกถอนสิทธิ์เข้าถึงผลลัพธ์หรือไม่?")) void deleteJob.mutateAsync({ jobId: job.id }).then(() => refreshVideoData()).catch(error => toast.error(error instanceof Error ? error.message : "ไม่สามารถลบงานได้")); }} className="rounded-md p-1 text-[#9f625d] hover:bg-rose-50"><Trash2 size={14} /></button></div></div>{job.status === "queued" || job.status === "processing" ? <div className="mt-4"><div className="mb-1.5 flex items-center justify-between text-[10px] font-medium text-[#7c8782]"><span>{job.status === "processing" ? "FFmpeg is working" : "Preparing your edit"}</span><span>{job.progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-[#edf0eb]"><div className="h-full rounded-full bg-[#95c24f] transition-all duration-500" style={{ width: `${job.progress}%` }} /></div></div> : job.status === "complete" ? <div className="mt-4 flex flex-wrap gap-2"><a href={`/api/video-jobs/${job.id}/download?asset=video`} className="inline-flex items-center gap-1.5 rounded-lg bg-[#17302a] px-3 py-1.5 text-[11px] font-semibold text-white transition hover:bg-[#294b40]"><Download size={13} /> Download video</a>{job.subtitleUrl && <a href={`/api/video-jobs/${job.id}/download?asset=subtitle`} className="inline-flex items-center gap-1.5 rounded-lg border border-[#d9e2d3] px-3 py-1.5 text-[11px] font-semibold text-[#536a5e] transition hover:bg-[#f4f8ed]"><Download size={13} /> Download SRT</a>}</div> : <p className="mt-3 text-[11px] text-rose-700">{job.errorMessage || "This edit needs another try."}</p>}</article>)}</div> : <div className="grid min-h-[220px] place-items-center rounded-2xl border border-dashed border-[#d9ded7] bg-[#f8f9f7] text-center"><div><Clock3 className="mx-auto mb-3 size-5 text-[#8a978f]" /><p className="text-sm font-semibold text-[#51615a]">No edits yet</p><p className="mt-1 text-[11px] text-[#87918c]">Your completed and in-progress jobs will live here.</p></div></div>}</div>
           <aside className="rounded-[24px] bg-[#e6f0df] p-5 text-[#20372f] shadow-[0_20px_60px_rgba(31,43,37,.05)]"><div className="mb-7 flex items-center justify-between"><span className="rounded-full bg-white/70 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[.13em] text-[#577c52]">live status</span><span className="size-2 rounded-full bg-[#8abe36] shadow-[0_0_0_4px_rgba(138,190,54,.15)]" /></div>{activeJob ? <><p className="font-display text-2xl font-semibold tracking-[-.04em]">Editing in progress</p><p className="mt-2 text-xs leading-5 text-[#5a6f64]">We are applying your approved edit plan to the assembled timeline. You can stay here while the status updates.</p><div className="mt-7 rounded-2xl bg-white/65 p-4"><div className="mb-2 flex items-center justify-between text-[11px] font-semibold"><span>{activeJob.progress}% complete</span><span className="text-[#708679]">{statusLabel(activeJob.status)}</span></div><div className="h-2 overflow-hidden rounded-full bg-[#d5e2d0]"><div className="h-full rounded-full bg-[#79a83c]" style={{ width: `${activeJob.progress}%` }} /></div></div></> : <><CheckCircle2 className="mb-4 size-6 text-[#6d9c3d]" /><p className="font-display text-2xl font-semibold tracking-[-.04em]">Studio is ready</p><p className="mt-2 text-xs leading-5 text-[#5a6f64]">Arrange your clips, describe the edit, and choose subtitle styling whenever your command asks for captions.</p><div className="mt-7 space-y-3">{[["Clip join", "Assembles your chosen order"], ["Smart subtitles", "Whisper transcription with style"], ["Privacy", "Delete or set an access expiry"]].map(([title, copy], index) => <div className="flex items-start gap-3" key={title}><span className="grid size-5 shrink-0 place-items-center rounded-full bg-white text-[10px] font-bold text-[#6b9940]">0{index + 1}</span><div><p className="text-[11px] font-bold">{title}</p><p className="mt-0.5 text-[10px] text-[#62776c]">{copy}</p></div></div>)}</div></>}</aside>
         </section>
+        {isProjectLibraryOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-[#13231ed1] p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="Project library"><section className="max-h-[85vh] w-full max-w-2xl overflow-hidden rounded-[24px] bg-[#fbfaf8] shadow-2xl"><div className="flex items-start justify-between border-b border-[#e5e5df] p-5"><div><div className="flex items-center gap-2 text-[#5c8341]"><FolderOpen size={16} /><p className="text-[10px] font-bold uppercase tracking-[.14em]">Project library</p></div><h2 className="mt-1 font-display text-2xl font-semibold tracking-[-.04em]">Open an earlier edit</h2><p className="mt-1 text-[11px] text-[#74817a]">โปรเจกต์อยู่ในเบราว์เซอร์นี้ และไม่แสดงงานที่ถูกลบหรือหมดอายุแล้ว</p></div><button aria-label="Close project library" onClick={() => setIsProjectLibraryOpen(false)} className="rounded-lg p-2 text-[#6e7d75] transition hover:bg-[#eef2eb]"><X size={17} /></button></div><div className="border-b border-[#e5e5df] p-4"><label className="flex items-center gap-2 rounded-xl border border-[#d9e0d6] bg-white px-3 py-2.5 text-[#7c8982]"><Search size={15} /><input aria-label="Search projects" value={projectSearch} onChange={event => setProjectSearch(event.target.value)} placeholder="Search project names" className="min-w-0 flex-1 bg-transparent text-xs font-medium text-[#273a31] outline-none placeholder:text-[#9aa49f]" /></label></div><div className="max-h-[53vh] space-y-2 overflow-y-auto p-4">{searchedProjectsQuery.isLoading ? <div className="grid h-32 place-items-center"><Loader2 className="size-5 animate-spin text-[#6f9a4d]" /></div> : (searchedProjectsQuery.data ?? []).length ? (searchedProjectsQuery.data ?? []).map(item => <button key={item.id} onClick={() => { setSelectedProjectId(item.id); setSelectedClipId(null); setIsProjectLibraryOpen(false); }} className={`flex w-full items-center justify-between gap-4 rounded-2xl border p-4 text-left transition ${item.id === selectedProjectId ? "border-[#91ba5c] bg-[#f1f7e8]" : "border-[#e3e6e1] bg-white hover:border-[#b9d195]"}`}><div className="min-w-0"><p className="truncate text-sm font-semibold text-[#2a4035]">{item.title}</p><p className="mt-1 text-[10px] text-[#78867e]">Project #{item.id} · {new Date(item.createdAt).toLocaleDateString()}</p></div><span className="shrink-0 rounded-lg bg-[#edf4e3] px-2.5 py-1.5 text-[10px] font-semibold text-[#587a3d]">Open</span></button>) : <div className="grid min-h-36 place-items-center rounded-2xl border border-dashed border-[#d8ded6] text-center"><p className="text-xs text-[#7a8880]">ไม่พบโปรเจกต์ที่ตรงกับคำค้นหา</p></div>}</div></section></div>}
       </main>
     </div>
   );

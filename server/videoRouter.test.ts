@@ -8,11 +8,13 @@ const mocks = vi.hoisted(() => ({
   listProjectsForUser: vi.fn(),
   listVideoClips: vi.fn(),
   listEditJobsForUser: vi.fn(),
+  renameVideoProject: vi.fn(),
   reorderVideoClips: vi.fn(),
   setProjectRetention: vi.fn(),
   softDeleteEditJob: vi.fn(),
   softDeleteProject: vi.fn(),
   sweepExpiredProjects: vi.fn(),
+  updateVideoClipTrim: vi.fn(),
   resolveVideoActor: vi.fn(),
 }));
 
@@ -22,11 +24,13 @@ vi.mock("./db", () => ({
   listEditJobsForUser: mocks.listEditJobsForUser,
   listProjectsForUser: mocks.listProjectsForUser,
   listVideoClips: mocks.listVideoClips,
+  renameVideoProject: mocks.renameVideoProject,
   reorderVideoClips: mocks.reorderVideoClips,
   setProjectRetention: mocks.setProjectRetention,
   softDeleteEditJob: mocks.softDeleteEditJob,
   softDeleteProject: mocks.softDeleteProject,
   sweepExpiredProjects: mocks.sweepExpiredProjects,
+  updateVideoClipTrim: mocks.updateVideoClipTrim,
 }));
 
 vi.mock("./videoEditing", () => ({
@@ -97,6 +101,21 @@ describe("video router", () => {
     }));
   });
 
+  it("uses the selected Thai subtitle preset when a manual style is not supplied", async () => {
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 33, userId: 7 });
+    mocks.createEditJob.mockResolvedValue({ id: "job_test_001", status: "queued", progress: 0 });
+    const caller = appRouter.createCaller(createContext());
+
+    await caller.video.createJob({ projectId: 33, command: "สร้างซับไตเติล", subtitlePreset: "thai_story" });
+
+    expect(mocks.createEditJob).toHaveBeenCalledWith(expect.objectContaining({
+      subtitlePreset: "thai_story",
+      subtitleFont: "Noto Sans Thai",
+      subtitleSize: "large",
+      subtitlePosition: "middle",
+    }));
+  });
+
   it("does not create a job when the project is not owned by the caller", async () => {
     mocks.getVideoProjectForUser.mockResolvedValue(undefined);
     const caller = appRouter.createCaller(createContext());
@@ -122,6 +141,27 @@ describe("video router", () => {
     await caller.video.reorderClips({ projectId: 55, clipIds: [9, 8] });
 
     expect(mocks.reorderVideoClips).toHaveBeenCalledWith(55, 101, [9, 8]);
+  });
+
+  it("persists a selected clip range only within the current guest project", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.updateVideoClipTrim.mockResolvedValue({ id: 9, projectId: 55, trimStartMs: 500, trimEndMs: 2500 });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.setClipTrim({ projectId: 55, clipId: 9, trimStartMs: 500, trimEndMs: 2500 })).resolves.toMatchObject({ id: 9, trimStartMs: 500, trimEndMs: 2500 });
+    expect(mocks.updateVideoClipTrim).toHaveBeenCalledWith(55, 9, 101, 500, 2500);
+  });
+
+  it("searches and renames only projects owned by the current guest", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.listProjectsForUser.mockResolvedValue([{ id: 55, title: "Thai story" }]);
+    mocks.renameVideoProject.mockResolvedValue({ id: 55, title: "Final Thai story" });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.listProjects({ search: "Thai" })).resolves.toEqual([{ id: 55, title: "Thai story" }]);
+    await expect(caller.video.renameProject({ projectId: 55, title: "Final Thai story" })).resolves.toMatchObject({ title: "Final Thai story" });
+    expect(mocks.listProjectsForUser).toHaveBeenCalledWith(101, "Thai");
+    expect(mocks.renameVideoProject).toHaveBeenCalledWith(55, 101, "Final Thai story");
   });
 
   it("soft-deletes a job only when it belongs to the current guest", async () => {

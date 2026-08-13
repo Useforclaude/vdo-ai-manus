@@ -166,6 +166,30 @@ async function normalizeClip(sourcePath: string, outputPath: string) {
   await runBinary("ffmpeg", args);
 }
 
+export function clipTrimRange(durationSeconds: number, trimStartMs?: number | null, trimEndMs?: number | null) {
+  const safeDuration = Math.max(0.1, durationSeconds);
+  const start = Math.min(Math.max(0, (trimStartMs ?? 0) / 1000), Math.max(0, safeDuration - 0.1));
+  const requestedEnd = trimEndMs === null || trimEndMs === undefined ? safeDuration : trimEndMs / 1000;
+  const end = Math.min(safeDuration, requestedEnd);
+  if (end - start < 0.1) throw new Error("Each clip must retain at least 0.1 seconds after trimming");
+  return { start, end, isTrimmed: start > 0.001 || end < safeDuration - 0.001 };
+}
+
+async function trimClipToRange(sourcePath: string, outputPath: string, range: ReturnType<typeof clipTrimRange>) {
+  if (!range.isTrimmed) {
+    await fs.copyFile(sourcePath, outputPath);
+    return;
+  }
+  await runBinary("ffmpeg", [
+    "-y", "-i", sourcePath,
+    "-ss", String(range.start),
+    "-t", String(range.end - range.start),
+    "-map", "0:v:0", "-map", "0:a?",
+    "-c:v", "libx264", "-c:a", "aac",
+    "-movflags", "+faststart", outputPath,
+  ]);
+}
+
 async function concatenateClips(normalizedPaths: string[], outputPath: string, workspace: string) {
   if (normalizedPaths.length === 1) {
     await fs.copyFile(normalizedPaths[0], outputPath);
@@ -302,15 +326,19 @@ export async function processVideoJob(jobId: string, userId: number) {
     await db.updateEditJob(jobId, userId, startVideoJob());
     const storedClips = await db.listVideoClips(project.id, userId);
     const sources = storedClips.length
-      ? storedClips.map(clip => ({ storageKey: clip.storageKey, originalName: clip.originalName }))
-      : [{ storageKey: project.sourceStorageKey, originalName: project.sourceFileName }];
+      ? storedClips.map(clip => ({ storageKey: clip.storageKey, originalName: clip.originalName, trimStartMs: clip.trimStartMs, trimEndMs: clip.trimEndMs }))
+      : [{ storageKey: project.sourceStorageKey, originalName: project.sourceFileName, trimStartMs: null, trimEndMs: null }];
     const normalizedPaths: string[] = [];
     let duration = 0;
     for (let index = 0; index < sources.length; index += 1) {
       const sourcePath = path.join(workspace, `clip-${index}.source`);
+      const trimmedPath = path.join(workspace, `clip-${index}.trimmed.mp4`);
       const normalizedPath = path.join(workspace, `clip-${index}.normalized.mp4`);
       await downloadToFile(await storageGetSignedUrl(sources[index].storageKey), sourcePath);
-      await normalizeClip(sourcePath, normalizedPath);
+      const sourceDuration = await probeDuration(sourcePath);
+      const range = clipTrimRange(sourceDuration, sources[index].trimStartMs, sources[index].trimEndMs);
+      await trimClipToRange(sourcePath, trimmedPath, range);
+      await normalizeClip(trimmedPath, normalizedPath);
       normalizedPaths.push(normalizedPath);
       duration += await probeDuration(normalizedPath);
       await db.updateEditJob(jobId, userId, updateVideoJobProgress(Math.min(24, 6 + Math.floor((index + 1) / sources.length * 18))));
@@ -329,7 +357,8 @@ export async function processVideoJob(jobId: string, userId: number) {
       subtitle = await createSubtitle(jobId, inputPath, userId);
       await db.updateEditJob(jobId, userId, { ...updateVideoJobProgress(45), subtitleStorageKey: subtitle.key, subtitleUrl: subtitle.url });
     }
-    const needsRender = sources.length > 1 || commandExists(plan, "remove_silence") || commandExists(plan, "trim") || commandExists(plan, "crop_16_9") || Boolean(subtitle);
+    const hasClipTrim = sources.some(source => source.trimStartMs !== null || source.trimEndMs !== null);
+    const needsRender = sources.length > 1 || hasClipTrim || commandExists(plan, "remove_silence") || commandExists(plan, "trim") || commandExists(plan, "crop_16_9") || Boolean(subtitle);
     let video: { key: string; url: string } | undefined;
     if (needsRender) {
       let progressWrite = Promise.resolve();

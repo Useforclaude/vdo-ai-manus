@@ -24,12 +24,38 @@ try {
   await page.getByRole("button", { name: "Move clip up" }).nth(1).click();
   await page.getByText(/1\. clip-two\.mp4/).waitFor({ state: "visible", timeout: 10_000 });
 
+  const trimStart = page.getByLabel("Clip trim start");
+  const trimEnd = page.getByLabel("Clip trim end");
+  await trimStart.evaluate((input) => {
+    input.value = "100";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await trimEnd.evaluate((input) => {
+    input.value = "1000";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const trimSaved = page.waitForResponse(response => response.url().includes("video.setClipTrim") && response.ok(), { timeout: 10_000 });
+  await page.getByRole("button", { name: "Save trim" }).click();
+  await trimSaved;
+
+  const projectName = page.getByRole("textbox", { name: "Project name" });
+  await projectName.fill("E2E Timeline Studio");
+  const projectRenamed = page.waitForResponse(response => response.url().includes("video.renameProject") && response.ok(), { timeout: 10_000 });
+  await page.getByRole("button", { name: "Save project name" }).click();
+  await projectRenamed;
+  await page.getByRole("button", { name: "Clip library" }).click();
+  const library = page.getByRole("dialog", { name: "Project library" });
+  await library.getByLabel("Search projects").fill("E2E Timeline");
+  await library.getByText("E2E Timeline Studio", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  await library.getByRole("button", { name: /E2E Timeline Studio/ }).click();
+  await library.waitFor({ state: "hidden", timeout: 10_000 });
+
   const command = page.locator("textarea");
   await command.fill("Create subtitles");
   await page.getByText("Subtitle style for this edit").waitFor({ state: "visible", timeout: 10_000 });
-  await page.locator("label").filter({ hasText: "FONT" }).locator("select").selectOption("Inter");
-  await page.locator("label").filter({ hasText: "SIZE" }).locator("select").selectOption("large");
-  await page.locator("label").filter({ hasText: "POSITION" }).locator("select").selectOption("top");
+  await page.getByRole("button", { name: /Thai Story/ }).click();
 
   await command.fill("Crop to 16:9");
   await page.getByRole("button", { name: /Create edit/ }).click();
@@ -44,7 +70,7 @@ try {
   console.log(JSON.stringify({
     status: "passed",
     previewUrl,
-    checks: ["two uploads", "selected preview", "clip reorder", "subtitle controls", "completed edit", "project deletion"],
+    checks: ["two uploads", "selected preview", "clip reorder", "saved clip trim", "project rename and library open", "Thai subtitle preset", "completed edit", "project deletion"],
   }));
 } finally {
   await browser.close();

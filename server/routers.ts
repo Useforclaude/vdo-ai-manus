@@ -6,12 +6,14 @@ import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
 import { createJobId, interpretVideoCommand } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
+import { subtitleStyleForPreset } from "@shared/subtitles";
 
 const subtitleStyleInput = z.object({
   font: z.enum(["Noto Sans Thai", "Arial", "Inter"]).default("Noto Sans Thai"),
   size: z.enum(["small", "medium", "large"]).default("medium"),
   position: z.enum(["bottom", "middle", "top"]).default("bottom"),
 });
+const subtitlePresetInput = z.enum(["thai_standard", "thai_story", "thai_minimal", "custom"]);
 
 export const appRouter = router({
   system: systemRouter,
@@ -29,10 +31,10 @@ export const appRouter = router({
       await db.sweepExpiredProjects(actor.userId);
       return db.listEditJobsForUser(actor.userId);
     }),
-    listProjects: publicProcedure.query(async ({ ctx }) => {
+    listProjects: publicProcedure.input(z.object({ search: z.string().trim().max(120).optional() }).optional()).query(async ({ ctx, input }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
       await db.sweepExpiredProjects(actor.userId);
-      return db.listProjectsForUser(actor.userId);
+      return db.listProjectsForUser(actor.userId, input?.search);
     }),
     listClips: publicProcedure.input(z.object({ projectId: z.number().int().positive() })).query(async ({ ctx, input }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
@@ -45,13 +47,15 @@ export const appRouter = router({
       projectId: z.number().int().positive(),
       command: z.string().trim().min(2).max(1200),
       subtitleStyle: subtitleStyleInput.optional(),
+      subtitlePreset: subtitlePresetInput.optional(),
     })).mutation(async ({ ctx, input }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
       await db.sweepExpiredProjects(actor.userId);
       const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
       if (!project) throw new Error("Video project was not found");
       const operationPlan = await interpretVideoCommand(input.command);
-      const subtitleStyle = input.subtitleStyle ?? subtitleStyleInput.parse({});
+      const subtitlePreset = input.subtitlePreset ?? "thai_standard";
+      const subtitleStyle = input.subtitleStyle ?? (subtitlePreset === "custom" ? subtitleStyleInput.parse({}) : subtitleStyleForPreset(subtitlePreset));
       return db.createEditJob({
         id: createJobId(),
         projectId: project.id,
@@ -64,7 +68,34 @@ export const appRouter = router({
         subtitleFont: subtitleStyle.font,
         subtitleSize: subtitleStyle.size,
         subtitlePosition: subtitleStyle.position,
+        subtitlePreset,
       });
+    }),
+    renameProject: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      title: z.string().trim().min(1).max(255),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const project = await db.renameVideoProject(input.projectId, actor.userId, input.title);
+      if (!project) throw new Error("Video project was not found");
+      return project;
+    }),
+    setClipTrim: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      clipId: z.number().int().positive(),
+      trimStartMs: z.number().int().min(0).max(180_000).nullable(),
+      trimEndMs: z.number().int().min(0).max(180_000).nullable(),
+    }).superRefine((value, issue) => {
+      if (value.trimStartMs !== null && value.trimEndMs !== null && value.trimEndMs <= value.trimStartMs) {
+        issue.addIssue({ code: z.ZodIssueCode.custom, path: ["trimEndMs"], message: "Clip end must be after its start" });
+      }
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const clip = await db.updateVideoClipTrim(input.projectId, input.clipId, actor.userId, input.trimStartMs, input.trimEndMs);
+      if (!clip) throw new Error("Video clip was not found");
+      return clip;
     }),
     reorderClips: publicProcedure.input(z.object({
       projectId: z.number().int().positive(),

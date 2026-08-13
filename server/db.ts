@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, lt, or } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   editJobs,
@@ -87,14 +87,28 @@ export async function getVideoProjectForUser(projectId: number, userId: number) 
   return rows[0];
 }
 
-export async function listProjectsForUser(userId: number) {
+export async function listProjectsForUser(userId: number, search?: string) {
   const db = requireDb(await getDb());
   const now = new Date();
+  const query = search?.trim();
   return db.select().from(videoProjects).where(and(
     eq(videoProjects.userId, userId),
     isNull(videoProjects.deletedAt),
     or(isNull(videoProjects.expiresAt), gt(videoProjects.expiresAt, now)),
+    query ? like(videoProjects.title, `%${query}%`) : undefined,
   )).orderBy(desc(videoProjects.updatedAt));
+}
+
+export async function renameVideoProject(projectId: number, userId: number, title: string) {
+  const project = await getVideoProjectForUser(projectId, userId);
+  if (!project) return undefined;
+  const db = requireDb(await getDb());
+  await db.update(videoProjects).set({ title }).where(and(
+    eq(videoProjects.id, projectId),
+    eq(videoProjects.userId, userId),
+    isNull(videoProjects.deletedAt),
+  ));
+  return getVideoProjectForUser(projectId, userId);
 }
 
 export async function createVideoClip(values: InsertVideoClip) {
@@ -145,6 +159,23 @@ export async function reorderVideoClips(projectId: number, userId: number, clipI
     }
   });
   return listVideoClips(projectId, userId);
+}
+
+export async function updateVideoClipTrim(projectId: number, clipId: number, userId: number, trimStartMs: number | null, trimEndMs: number | null) {
+  const project = await getVideoProjectForUser(projectId, userId);
+  if (!project) return undefined;
+  const db = requireDb(await getDb());
+  await db.update(videoClips).set({ trimStartMs, trimEndMs }).where(and(
+    eq(videoClips.id, clipId),
+    eq(videoClips.projectId, projectId),
+    eq(videoClips.userId, userId),
+  ));
+  const rows = await db.select().from(videoClips).where(and(
+    eq(videoClips.id, clipId),
+    eq(videoClips.projectId, projectId),
+    eq(videoClips.userId, userId),
+  )).limit(1);
+  return rows[0];
 }
 
 export async function softDeleteProject(projectId: number, userId: number) {

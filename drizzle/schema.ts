@@ -39,6 +39,8 @@ export const videoClips = mysqlTable("video_clips", {
   sizeBytes: int("size_bytes").notNull(),
   storageKey: varchar("storage_key", { length: 1024 }).notNull(),
   storageUrl: text("storage_url").notNull(),
+  trimStartMs: int("trim_start_ms"),
+  trimEndMs: int("trim_end_ms"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, table => [
   index("video_clips_project_order_idx").on(table.projectId, table.sortOrder),
@@ -61,6 +63,7 @@ export const editJobs = mysqlTable("edit_jobs", {
   subtitleFont: varchar("subtitle_font", { length: 120 }).notNull().default("Noto Sans Thai"),
   subtitleSize: mysqlEnum("subtitle_size", ["small", "medium", "large"]).notNull().default("medium"),
   subtitlePosition: mysqlEnum("subtitle_position", ["bottom", "middle", "top"]).notNull().default("bottom"),
+  subtitlePreset: mysqlEnum("subtitle_preset", ["thai_standard", "thai_story", "thai_minimal", "custom"]).notNull().default("thai_standard"),
   errorMessage: text("error_message"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
