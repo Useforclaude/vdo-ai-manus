@@ -3,6 +3,7 @@
 // Downloads return /manus-storage/{key} paths served via 307 redirect.
 
 import { ENV } from "./_core/env";
+import crypto from "node:crypto";
 
 function getForgeConfig() {
   const forgeUrl = ENV.forgeApiUrl;
