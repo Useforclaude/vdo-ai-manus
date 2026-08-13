@@ -5,7 +5,14 @@ const mocks = vi.hoisted(() => ({
   createEditJob: vi.fn(),
   getVideoProjectForUser: vi.fn(),
   interpretVideoCommand: vi.fn(),
+  listProjectsForUser: vi.fn(),
+  listVideoClips: vi.fn(),
   listEditJobsForUser: vi.fn(),
+  reorderVideoClips: vi.fn(),
+  setProjectRetention: vi.fn(),
+  softDeleteEditJob: vi.fn(),
+  softDeleteProject: vi.fn(),
+  sweepExpiredProjects: vi.fn(),
   resolveVideoActor: vi.fn(),
 }));
 
@@ -13,6 +20,13 @@ vi.mock("./db", () => ({
   createEditJob: mocks.createEditJob,
   getVideoProjectForUser: mocks.getVideoProjectForUser,
   listEditJobsForUser: mocks.listEditJobsForUser,
+  listProjectsForUser: mocks.listProjectsForUser,
+  listVideoClips: mocks.listVideoClips,
+  reorderVideoClips: mocks.reorderVideoClips,
+  setProjectRetention: mocks.setProjectRetention,
+  softDeleteEditJob: mocks.softDeleteEditJob,
+  softDeleteProject: mocks.softDeleteProject,
+  sweepExpiredProjects: mocks.sweepExpiredProjects,
 }));
 
 vi.mock("./videoEditing", () => ({
@@ -47,6 +61,7 @@ describe("video router", () => {
     vi.resetAllMocks();
     mocks.resolveVideoActor.mockResolvedValue({ userId: 7, isGuest: false });
     mocks.interpretVideoCommand.mockResolvedValue({ sourceLanguage: "th", operations: [{ type: "generate_subtitles" }], summary: "สร้างซับไตเติล" });
+    mocks.sweepExpiredProjects.mockResolvedValue(0);
   });
 
   it("creates a queued job only for a project owned by the caller", async () => {
@@ -68,6 +83,20 @@ describe("video router", () => {
     expect(result).toMatchObject({ id: "job_test_001", status: "queued" });
   });
 
+  it("records the user-selected subtitle style with an edit job", async () => {
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 33, userId: 7 });
+    mocks.createEditJob.mockResolvedValue({ id: "job_test_001", status: "queued", progress: 0 });
+    const caller = appRouter.createCaller(createContext());
+
+    await caller.video.createJob({ projectId: 33, command: "สร้างซับไตเติล", subtitleStyle: { font: "Inter", size: "large", position: "top" } });
+
+    expect(mocks.createEditJob).toHaveBeenCalledWith(expect.objectContaining({
+      subtitleFont: "Inter",
+      subtitleSize: "large",
+      subtitlePosition: "top",
+    }));
+  });
+
   it("does not create a job when the project is not owned by the caller", async () => {
     mocks.getVideoProjectForUser.mockResolvedValue(undefined);
     const caller = appRouter.createCaller(createContext());
@@ -83,5 +112,36 @@ describe("video router", () => {
 
     await expect(caller.video.listJobs()).resolves.toEqual([{ id: "job_guest_001", userId: 101 }]);
     expect(mocks.listEditJobsForUser).toHaveBeenCalledWith(101);
+  });
+
+  it("reorders clips only through the current guest's project ownership", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.reorderVideoClips.mockResolvedValue([{ id: 9, sortOrder: 0 }, { id: 8, sortOrder: 1 }]);
+    const caller = appRouter.createCaller(createContext(null));
+
+    await caller.video.reorderClips({ projectId: 55, clipIds: [9, 8] });
+
+    expect(mocks.reorderVideoClips).toHaveBeenCalledWith(55, 101, [9, 8]);
+  });
+
+  it("soft-deletes a job only when it belongs to the current guest", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.softDeleteEditJob.mockResolvedValue({ id: "job_guest_delete_1", userId: 101 });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.deleteJob({ jobId: "job_guest_delete_1" })).resolves.toEqual({ success: true });
+    expect(mocks.softDeleteEditJob).toHaveBeenCalledWith("job_guest_delete_1", 101);
+  });
+
+  it("sets a seven-day retention deadline for the project owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T00:00:00.000Z"));
+    mocks.setProjectRetention.mockResolvedValue({ id: 33 });
+    const caller = appRouter.createCaller(createContext());
+
+    await caller.video.setProjectRetention({ projectId: 33, retention: "seven_days" });
+
+    expect(mocks.setProjectRetention).toHaveBeenCalledWith(33, 7, new Date("2026-08-20T00:00:00.000Z"));
+    vi.useRealTimers();
   });
 });

@@ -6,6 +6,8 @@ import { storageGetSignedUrl, storagePut } from "./storage";
 import { MAX_SOURCE_BYTES, processVideoJob } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 
+const MAX_CLIPS_PER_PROJECT = 12;
+
 function safeFileName(name: string) {
   const base = path.basename(name).replace(/[^a-zA-Z0-9._-]/g, "_");
   return base || "source-video.mp4";
@@ -41,6 +43,7 @@ export function registerVideoRoutes(app: Express) {
   app.post("/api/video-upload", express.raw({ type: "*/*", limit: `${Math.floor(MAX_SOURCE_BYTES / 1024 / 1024)}mb` }), async (req, res) => {
     try {
       const actor = await resolveVideoActor(req, res);
+      await db.sweepExpiredProjects(actor.userId);
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: "A video file is required" });
       if (req.body.length > MAX_SOURCE_BYTES) return res.status(413).json({ error: "Video exceeds the 180 MB upload limit" });
       const fileName = safeFileName(String(req.header("x-file-name") ?? "source-video.mp4"));
@@ -57,16 +60,63 @@ export function registerVideoRoutes(app: Express) {
         sourceMimeType: mimeType,
         sourceBytes: req.body.length,
       });
-      return res.status(201).json({ project });
+      const clip = await db.createVideoClip({
+        projectId: project.id,
+        userId: actor.userId,
+        sortOrder: 0,
+        originalName: fileName,
+        mimeType,
+        sizeBytes: req.body.length,
+        storageKey: stored.key,
+        storageUrl: stored.url,
+      });
+      return res.status(201).json({ project, clip });
     } catch (error) {
       console.error("[Video] Upload failed", error);
       return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to upload video" });
     }
   });
 
+  app.post("/api/video-projects/:projectId/clips", express.raw({ type: "*/*", limit: `${Math.floor(MAX_SOURCE_BYTES / 1024 / 1024)}mb` }), async (req, res) => {
+    try {
+      const actor = await resolveVideoActor(req, res);
+      await db.sweepExpiredProjects(actor.userId);
+      const projectId = Number(req.params.projectId);
+      if (!Number.isSafeInteger(projectId) || projectId < 1) return res.status(400).json({ error: "Invalid video project" });
+      const project = await db.getVideoProjectForUser(projectId, actor.userId);
+      if (!project) return res.status(404).json({ error: "Video project was not found" });
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) return res.status(400).json({ error: "A video file is required" });
+      if (req.body.length > MAX_SOURCE_BYTES) return res.status(413).json({ error: "Video exceeds the 180 MB upload limit" });
+      const fileName = safeFileName(String(req.header("x-file-name") ?? "source-video.mp4"));
+      const mimeType = String(req.header("x-file-type") ?? req.header("content-type") ?? "video/mp4");
+      if (!mimeType.startsWith("video/")) return res.status(415).json({ error: "Please upload a video file" });
+      if (!appearsToBeVideo(req.body)) return res.status(415).json({ error: "The uploaded file does not contain a supported video signature" });
+      const clips = await db.listVideoClips(projectId, actor.userId);
+      if (clips.length >= MAX_CLIPS_PER_PROJECT) return res.status(422).json({ error: `A project can contain at most ${MAX_CLIPS_PER_PROJECT} clips` });
+      const totalBytes = clips.reduce((total, clip) => total + clip.sizeBytes, 0) + req.body.length;
+      if (totalBytes > MAX_SOURCE_BYTES) return res.status(413).json({ error: "Combined clips exceed the 180 MB processing limit" });
+      const stored = await storagePut(`users/${actor.userId}/video-editor/projects/${projectId}/clips/${fileName}`, req.body, mimeType);
+      const clip = await db.createVideoClip({
+        projectId,
+        userId: actor.userId,
+        sortOrder: await db.getNextClipSortOrder(projectId, actor.userId),
+        originalName: fileName,
+        mimeType,
+        sizeBytes: req.body.length,
+        storageKey: stored.key,
+        storageUrl: stored.url,
+      });
+      return res.status(201).json({ clip });
+    } catch (error) {
+      console.error("[Video] Clip upload failed", error);
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to upload video clip" });
+    }
+  });
+
   app.post("/api/video-jobs/:jobId/process", async (req, res) => {
     try {
       const actor = await resolveVideoActor(req, res);
+      await db.sweepExpiredProjects(actor.userId);
       if (!/^job_[a-zA-Z0-9_-]{8,64}$/.test(req.params.jobId)) return res.status(400).json({ error: "Invalid editing job" });
       const queuedJob = await db.getEditJobForUser(req.params.jobId, actor.userId);
       if (!queuedJob) return res.status(404).json({ error: "Editing job was not found" });
@@ -82,6 +132,7 @@ export function registerVideoRoutes(app: Express) {
   app.get("/api/video-jobs/:jobId/download", async (req, res) => {
     try {
       const actor = await resolveVideoActor(req, res);
+      await db.sweepExpiredProjects(actor.userId);
       if (!/^job_[a-zA-Z0-9_-]{8,64}$/.test(req.params.jobId)) return res.status(400).json({ error: "Invalid editing job" });
       const requestedAsset = req.query.asset ?? "video";
       if (requestedAsset !== "video" && requestedAsset !== "subtitle") return res.status(400).json({ error: "Invalid download asset" });

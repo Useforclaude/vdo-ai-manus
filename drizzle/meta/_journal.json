@@ -1,5 +1,27 @@
 {
   "version": "7",
   "dialect": "mysql",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1786618227974,
+      "tag": "0000_cineflow_baseline",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1786618377560,
+      "tag": "0001_new_butterfly",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1786618804923,
+      "tag": "0002_living_kid_colt",
+      "breakpoints": true
+    }
+  ]
 }

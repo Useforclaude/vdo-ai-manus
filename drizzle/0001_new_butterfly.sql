@@ -1,0 +1,2 @@
+ALTER TABLE `edit_jobs` MODIFY COLUMN `subtitle_size` enum('small','medium','large') NOT NULL DEFAULT 'medium';--> statement-breakpoint
+ALTER TABLE `edit_jobs` MODIFY COLUMN `subtitle_position` enum('bottom','middle','top') NOT NULL DEFAULT 'bottom';

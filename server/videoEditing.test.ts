@@ -7,7 +7,7 @@ const llm = vi.hoisted(() => ({
 
 vi.mock("./_core/llm", () => llm);
 
-import { createSrt, fallbackPlan, interpretVideoCommand } from "./videoEditing";
+import { createSrt, fallbackPlan, interpretVideoCommand, subtitleFilter } from "./videoEditing";
 import { completeVideoJob, failVideoJob, initialVideoJobState, startVideoJob, updateVideoJobProgress } from "./videoJobState";
 
 beforeEach(() => {
@@ -61,6 +61,24 @@ describe("interpretVideoCommand", () => {
       { type: "generate_subtitles" },
       { type: "crop_16_9" },
     ]);
+  });
+
+  it("uses the deterministic fallback when the LLM provider returns no response object", async () => {
+    llm.invokeLLM.mockResolvedValue(undefined);
+
+    await expect(interpretVideoCommand("ตัดช่วงเงียบทั้งหมด")).resolves.toMatchObject({
+      operations: [{ type: "remove_silence" }],
+    });
+  });
+});
+
+describe("subtitle rendering", () => {
+  it("creates an ASS subtitle filter with the requested readable style", () => {
+    const filter = subtitleFilter("/tmp/subtitles.srt", { font: "Noto Sans Thai", size: "large", position: "top" });
+    expect(filter).toContain("Fontname=Noto Sans Thai");
+    expect(filter).toContain("Fontsize=52");
+    expect(filter).toContain("Alignment=8");
+    expect(filter).toContain("charenc=UTF-8");
   });
 });
 

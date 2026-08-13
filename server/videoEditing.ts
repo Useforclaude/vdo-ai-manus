@@ -79,9 +79,8 @@ export async function interpretVideoCommand(command: string): Promise<EditPlan> 
         { role: "user", content: command },
       ],
     });
-    const content = Array.isArray(response?.choices)
-      ? response.choices[0]?.message?.content
-      : undefined;
+    if (!response || !Array.isArray(response.choices)) return fallback;
+    const content = response.choices[0]?.message?.content;
     if (typeof content !== "string") return fallback;
     const parsed = parsePlanContent(content);
     return validatePlan(parsed, fallback);
@@ -136,6 +135,48 @@ async function downloadToFile(url: string, destination: string) {
   if (stats.size > MAX_SOURCE_BYTES) throw new Error("Video exceeds the 180 MB processing limit");
 }
 
+async function hasAudioTrack(filePath: string) {
+  let output = "";
+  await new Promise<void>((resolve, reject) => {
+    const task = spawn("ffprobe", ["-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", filePath]);
+    task.stdout.on("data", chunk => { output += chunk.toString(); });
+    task.on("error", reject);
+    task.on("close", code => code === 0 ? resolve() : reject(new Error("Unable to inspect video audio")));
+  });
+  return output.trim().length > 0;
+}
+
+async function normalizeClip(sourcePath: string, outputPath: string) {
+  const audioExists = await hasAudioTrack(sourcePath);
+  const args = audioExists
+    ? ["-y", "-i", sourcePath, "-map", "0:v:0", "-map", "0:a:0"]
+    : ["-y", "-i", sourcePath, "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000", "-map", "0:v:0", "-map", "1:a:0"];
+  args.push(
+    "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1",
+    "-r", "30",
+    "-c:v", "libx264",
+    "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-ar", "48000",
+    "-ac", "2",
+    "-shortest",
+    "-movflags", "+faststart",
+    outputPath,
+  );
+  await runBinary("ffmpeg", args);
+}
+
+async function concatenateClips(normalizedPaths: string[], outputPath: string, workspace: string) {
+  if (normalizedPaths.length === 1) {
+    await fs.copyFile(normalizedPaths[0], outputPath);
+    return;
+  }
+  const manifestPath = path.join(workspace, "concat.txt");
+  const contents = normalizedPaths.map(filePath => `file '${filePath.replace(/'/g, "'\\''")}'`).join("\n");
+  await fs.writeFile(manifestPath, `${contents}\n`, "utf8");
+  await runBinary("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", manifestPath, "-c", "copy", "-movflags", "+faststart", outputPath]);
+}
+
 async function findKeepIntervals(inputPath: string, duration: number) {
   const starts: number[] = [];
   const ends: number[] = [];
@@ -180,21 +221,38 @@ async function createSubtitle(jobId: string, inputPath: string, userId: number) 
   const transcription = await transcribeAudio({ audioUrl: await storageGetSignedUrl(uploadedAudio.key) });
   if ("error" in transcription) throw new Error(transcription.error);
   const srt = createSrt(transcription.segments);
-  return storagePut(`users/${userId}/video-editor/${jobId}/subtitles.srt`, srt, "application/x-subrip");
+  const localPath = path.join(path.dirname(inputPath), "subtitles.srt");
+  await fs.writeFile(localPath, srt, "utf8");
+  const stored = await storagePut(`users/${userId}/video-editor/${jobId}/subtitles.srt`, srt, "application/x-subrip");
+  return { ...stored, localPath };
 }
 
-function applyBasicFilters(args: string[], plan: EditPlan) {
-  const trim = trimOperation(plan);
-  if (trim?.startSeconds !== undefined) args.push("-ss", String(trim.startSeconds));
-  args.push("-i", "INPUT");
-  if (trim?.endSeconds !== undefined) args.push("-to", String(trim.endSeconds));
+type SubtitleStyle = {
+  font: "Noto Sans Thai" | "Arial" | "Inter";
+  size: "small" | "medium" | "large";
+  position: "bottom" | "middle" | "top";
+};
+
+export function subtitleFilter(subtitlePath: string, style: SubtitleStyle) {
+  const fontSize = { small: 28, medium: 40, large: 52 }[style.size];
+  const alignment = { bottom: 2, middle: 5, top: 8 }[style.position];
+  const marginVertical = style.position === "bottom" ? 52 : 28;
+  const safePath = subtitlePath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+  const forceStyle = `Fontname=${style.font},Fontsize=${fontSize},Alignment=${alignment},MarginV=${marginVertical},Outline=2,Shadow=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000`;
+  return `subtitles=filename='${safePath}':charenc=UTF-8:force_style='${forceStyle}'`;
+}
+
+function videoFilters(plan: EditPlan, subtitlePath?: string, style?: SubtitleStyle) {
+  const filters: string[] = [];
   if (commandExists(plan, "crop_16_9")) {
-    args.push("-vf", "crop=if(gte(a\\,16/9)\\,ih*16/9\\,iw):if(gte(a\\,16/9)\\,ih\\,iw*9/16)");
+    filters.push("crop=if(gte(a\\,16/9)\\,ih*16/9\\,iw):if(gte(a\\,16/9)\\,ih\\,iw*9/16)");
   }
-  return args;
+  if (subtitlePath && style) filters.push(subtitleFilter(subtitlePath, style));
+  return filters;
 }
 
-async function renderVideo(inputPath: string, outputPath: string, plan: EditPlan, totalDuration: number, onProgress: (progress: number) => void) {
+async function renderVideo(inputPath: string, outputPath: string, plan: EditPlan, totalDuration: number, onProgress: (progress: number) => void, subtitlePath?: string, style?: SubtitleStyle) {
+  const filters = videoFilters(plan, subtitlePath, style);
   if (commandExists(plan, "remove_silence")) {
     const intervals = await findKeepIntervals(inputPath, totalDuration);
     const trim = trimOperation(plan);
@@ -205,15 +263,20 @@ async function renderVideo(inputPath: string, outputPath: string, plan: EditPlan
       `[0:a]atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS[a${index}]`,
     ]);
     const concatInputs = bounded.map((_, index) => `[v${index}][a${index}]`).join("");
-    const crop = commandExists(plan, "crop_16_9") ? ";[concatv]crop=if(gte(a\\,16/9)\\,ih*16/9\\,iw):if(gte(a\\,16/9)\\,ih\\,iw*9/16)[video]" : ";[concatv]null[video]";
-    const filter = `${chains.join(";")};${concatInputs}concat=n=${bounded.length}:v=1:a=1[concatv][concata]${crop}`;
+    const finalVideo = filters.length ? `;[concatv]${filters.join(",")}[video]` : ";[concatv]null[video]";
+    const filter = `${chains.join(";")};${concatInputs}concat=n=${bounded.length}:v=1:a=1[concatv][concata]${finalVideo}`;
     await runBinary("ffmpeg", ["-y", "-i", inputPath, "-filter_complex", filter, "-map", "[video]", "-map", "[concata]", "-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", "-progress", "pipe:2", "-nostats", outputPath], line => {
       const outTime = Number(line.match(/^out_time_ms=(\d+)/)?.[1] ?? 0) / 1_000_000;
       if (outTime) onProgress(Math.min(94, Math.max(35, Math.floor(30 + outTime / totalDuration * 60))));
     });
     return;
   }
-  const args = applyBasicFilters(["-y"], plan).map(value => value === "INPUT" ? inputPath : value);
+  const args = ["-y"];
+  const trim = trimOperation(plan);
+  if (trim?.startSeconds !== undefined) args.push("-ss", String(trim.startSeconds));
+  args.push("-i", inputPath);
+  if (trim?.endSeconds !== undefined) args.push("-to", String(trim.endSeconds));
+  if (filters.length) args.push("-vf", filters.join(","));
   args.push("-c:v", "libx264", "-c:a", "aac", "-movflags", "+faststart", "-progress", "pipe:2", "-nostats", outputPath);
   await runBinary("ffmpeg", args, line => {
     const outTime = Number(line.match(/^out_time_ms=(\d+)/)?.[1] ?? 0) / 1_000_000;
@@ -230,29 +293,53 @@ export async function processVideoJob(jobId: string, userId: number) {
   if (job.status === "processing") return job;
   const project = await db.getVideoProjectForUser(job.projectId, userId);
   if (!project) throw new Error("Source video was not found");
+  if (!project.sourceStorageKey || !project.sourceUrl) throw new Error("Source video access was revoked");
   const workspace = await fs.mkdtemp(path.join(tmpdir(), "vdo-command-"));
-  const inputPath = path.join(workspace, "source.mp4");
+  const inputPath = path.join(workspace, "timeline.mp4");
   const outputPath = path.join(workspace, "edited.mp4");
   activeJobs.add(jobId);
   try {
     await db.updateEditJob(jobId, userId, startVideoJob());
-    await downloadToFile(await storageGetSignedUrl(project.sourceStorageKey), inputPath);
-    const duration = await probeDuration(inputPath);
+    const storedClips = await db.listVideoClips(project.id, userId);
+    const sources = storedClips.length
+      ? storedClips.map(clip => ({ storageKey: clip.storageKey, originalName: clip.originalName }))
+      : [{ storageKey: project.sourceStorageKey, originalName: project.sourceFileName }];
+    const normalizedPaths: string[] = [];
+    let duration = 0;
+    for (let index = 0; index < sources.length; index += 1) {
+      const sourcePath = path.join(workspace, `clip-${index}.source`);
+      const normalizedPath = path.join(workspace, `clip-${index}.normalized.mp4`);
+      await downloadToFile(await storageGetSignedUrl(sources[index].storageKey), sourcePath);
+      await normalizeClip(sourcePath, normalizedPath);
+      normalizedPaths.push(normalizedPath);
+      duration += await probeDuration(normalizedPath);
+      await db.updateEditJob(jobId, userId, updateVideoJobProgress(Math.min(24, 6 + Math.floor((index + 1) / sources.length * 18))));
+    }
+    await concatenateClips(normalizedPaths, inputPath, workspace);
     await db.updateVideoProjectDuration(project.id, userId, Math.ceil(duration));
     await db.updateEditJob(jobId, userId, updateVideoJobProgress(24));
     const plan = job.operationPlan as EditPlan;
-    let subtitle: { key: string; url: string } | undefined;
+    const style: SubtitleStyle = {
+      font: job.subtitleFont === "Arial" || job.subtitleFont === "Inter" ? job.subtitleFont : "Noto Sans Thai",
+      size: job.subtitleSize === "small" || job.subtitleSize === "large" ? job.subtitleSize : "medium",
+      position: job.subtitlePosition === "middle" || job.subtitlePosition === "top" ? job.subtitlePosition : "bottom",
+    };
+    let subtitle: { key: string; url: string; localPath: string } | undefined;
     if (commandExists(plan, "generate_subtitles")) {
       subtitle = await createSubtitle(jobId, inputPath, userId);
       await db.updateEditJob(jobId, userId, { ...updateVideoJobProgress(45), subtitleStorageKey: subtitle.key, subtitleUrl: subtitle.url });
     }
-    const needsRender = commandExists(plan, "remove_silence") || commandExists(plan, "trim") || commandExists(plan, "crop_16_9");
+    const needsRender = sources.length > 1 || commandExists(plan, "remove_silence") || commandExists(plan, "trim") || commandExists(plan, "crop_16_9") || Boolean(subtitle);
     let video: { key: string; url: string } | undefined;
     if (needsRender) {
       let progressWrite = Promise.resolve();
-      await renderVideo(inputPath, outputPath, plan, duration, progress => {
-        progressWrite = progressWrite.then(() => db.updateEditJob(jobId, userId, updateVideoJobProgress(progress)).then(() => undefined));
-      });
+      if (commandExists(plan, "remove_silence") || commandExists(plan, "trim") || commandExists(plan, "crop_16_9") || subtitle) {
+        await renderVideo(inputPath, outputPath, plan, duration, progress => {
+          progressWrite = progressWrite.then(() => db.updateEditJob(jobId, userId, updateVideoJobProgress(progress)).then(() => undefined));
+        }, subtitle?.localPath, subtitle ? style : undefined);
+      } else {
+        await fs.copyFile(inputPath, outputPath);
+      }
       await progressWrite;
       video = await storagePut(`users/${userId}/video-editor/${jobId}/edited.mp4`, await fs.readFile(outputPath), "video/mp4");
     }

@@ -1,4 +1,4 @@
-import { int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { index, int, json, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
 import type { EditPlan } from "../shared/editing";
 
 export const users = mysqlTable("users", {
@@ -18,14 +18,32 @@ export const videoProjects = mysqlTable("video_projects", {
   userId: int("user_id").notNull(),
   title: varchar("title", { length: 255 }).notNull(),
   sourceFileName: varchar("source_file_name", { length: 512 }).notNull(),
-  sourceStorageKey: varchar("source_storage_key", { length: 1024 }).notNull(),
-  sourceUrl: text("source_url").notNull(),
+  sourceStorageKey: varchar("source_storage_key", { length: 1024 }),
+  sourceUrl: text("source_url"),
   sourceMimeType: varchar("source_mime_type", { length: 255 }).notNull(),
   sourceBytes: int("source_bytes").notNull(),
   durationSeconds: int("duration_seconds"),
+  expiresAt: timestamp("expires_at"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
+
+export const videoClips = mysqlTable("video_clips", {
+  id: int("id").autoincrement().primaryKey(),
+  projectId: int("project_id").notNull(),
+  userId: int("user_id").notNull(),
+  sortOrder: int("sort_order").notNull(),
+  originalName: varchar("original_name", { length: 512 }).notNull(),
+  mimeType: varchar("mime_type", { length: 255 }).notNull(),
+  sizeBytes: int("size_bytes").notNull(),
+  storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+  storageUrl: text("storage_url").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  index("video_clips_project_order_idx").on(table.projectId, table.sortOrder),
+  index("video_clips_user_project_idx").on(table.userId, table.projectId),
+]);
 
 export const editJobs = mysqlTable("edit_jobs", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -40,9 +58,13 @@ export const editJobs = mysqlTable("edit_jobs", {
   processedUrl: text("processed_url"),
   subtitleStorageKey: varchar("subtitle_storage_key", { length: 1024 }),
   subtitleUrl: text("subtitle_url"),
+  subtitleFont: varchar("subtitle_font", { length: 120 }).notNull().default("Noto Sans Thai"),
+  subtitleSize: mysqlEnum("subtitle_size", ["small", "medium", "large"]).notNull().default("medium"),
+  subtitlePosition: mysqlEnum("subtitle_position", ["bottom", "middle", "top"]).notNull().default("bottom"),
   errorMessage: text("error_message"),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
@@ -51,5 +73,7 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type VideoProject = typeof videoProjects.$inferSelect;
 export type InsertVideoProject = typeof videoProjects.$inferInsert;
+export type VideoClip = typeof videoClips.$inferSelect;
+export type InsertVideoClip = typeof videoClips.$inferInsert;
 export type EditJob = typeof editJobs.$inferSelect;
 export type InsertEditJob = typeof editJobs.$inferInsert;

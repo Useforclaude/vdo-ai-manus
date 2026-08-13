@@ -5,9 +5,10 @@ const mocks = vi.hoisted(() => ({
   processVideoJob: vi.fn(),
   resolveVideoActor: vi.fn(),
   storageGetSignedUrl: vi.fn(),
+  sweepExpiredProjects: vi.fn(),
 }));
 
-vi.mock("./db", () => ({ getEditJobForUser: mocks.getEditJobForUser }));
+vi.mock("./db", () => ({ getEditJobForUser: mocks.getEditJobForUser, sweepExpiredProjects: mocks.sweepExpiredProjects }));
 vi.mock("./videoEditing", () => ({ MAX_SOURCE_BYTES: 180 * 1024 * 1024, processVideoJob: mocks.processVideoJob }));
 vi.mock("./storage", () => ({ storagePut: vi.fn(), storageGetSignedUrl: mocks.storageGetSignedUrl }));
 vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
@@ -40,6 +41,7 @@ describe("video process endpoint", () => {
     vi.resetAllMocks();
     mocks.resolveVideoActor.mockResolvedValue({ userId: 7, isGuest: false });
     mocks.processVideoJob.mockResolvedValue(undefined);
+    mocks.sweepExpiredProjects.mockResolvedValue(0);
   });
 
   it("rejects a malformed job identifier before querying the database", async () => {
@@ -98,6 +100,7 @@ describe("video download endpoint", () => {
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.sweepExpiredProjects.mockResolvedValue(0);
   });
 
   it("selects stable storage keys and attachment names for completed outputs", () => {

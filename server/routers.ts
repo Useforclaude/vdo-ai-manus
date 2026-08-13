@@ -7,6 +7,12 @@ import * as db from "./db";
 import { createJobId, interpretVideoCommand } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 
+const subtitleStyleInput = z.object({
+  font: z.enum(["Noto Sans Thai", "Arial", "Inter"]).default("Noto Sans Thai"),
+  size: z.enum(["small", "medium", "large"]).default("medium"),
+  position: z.enum(["bottom", "middle", "top"]).default("bottom"),
+});
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -20,13 +26,32 @@ export const appRouter = router({
   video: router({
     listJobs: publicProcedure.query(async ({ ctx }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
       return db.listEditJobsForUser(actor.userId);
     }),
-    createJob: publicProcedure.input(z.object({ projectId: z.number().int().positive(), command: z.string().trim().min(2).max(1200) })).mutation(async ({ ctx, input }) => {
+    listProjects: publicProcedure.query(async ({ ctx }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      return db.listProjectsForUser(actor.userId);
+    }),
+    listClips: publicProcedure.input(z.object({ projectId: z.number().int().positive() })).query(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
+      if (!project) throw new Error("Video project was not found");
+      return db.listVideoClips(project.id, actor.userId);
+    }),
+    createJob: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      command: z.string().trim().min(2).max(1200),
+      subtitleStyle: subtitleStyleInput.optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
       const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
       if (!project) throw new Error("Video project was not found");
       const operationPlan = await interpretVideoCommand(input.command);
+      const subtitleStyle = input.subtitleStyle ?? subtitleStyleInput.parse({});
       return db.createEditJob({
         id: createJobId(),
         projectId: project.id,
@@ -36,7 +61,50 @@ export const appRouter = router({
         operationPlan,
         status: "queued",
         progress: 0,
+        subtitleFont: subtitleStyle.font,
+        subtitleSize: subtitleStyle.size,
+        subtitlePosition: subtitleStyle.position,
       });
+    }),
+    reorderClips: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      clipIds: z.array(z.number().int().positive()).min(1).max(12),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      return db.reorderVideoClips(input.projectId, actor.userId, input.clipIds);
+    }),
+    removeClip: publicProcedure.input(z.object({ projectId: z.number().int().positive(), clipId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const removed = await db.removeVideoClip(input.projectId, input.clipId, actor.userId);
+      if (!removed) throw new Error("Video clip was not found");
+      return { success: true } as const;
+    }),
+    deleteProject: publicProcedure.input(z.object({ projectId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const project = await db.softDeleteProject(input.projectId, actor.userId);
+      if (!project) throw new Error("Video project was not found");
+      return { success: true } as const;
+    }),
+    deleteJob: publicProcedure.input(z.object({ jobId: z.string().regex(/^job_[a-zA-Z0-9_-]{8,64}$/) })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const job = await db.softDeleteEditJob(input.jobId, actor.userId);
+      if (!job) throw new Error("Editing job was not found");
+      return { success: true } as const;
+    }),
+    setProjectRetention: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      retention: z.enum(["seven_days", "thirty_days", "keep"]),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const expiresAt = input.retention === "keep" ? null : new Date(Date.now() + (input.retention === "seven_days" ? 7 : 30) * 24 * 60 * 60 * 1000);
+      const project = await db.setProjectRetention(input.projectId, actor.userId, expiresAt);
+      if (!project) throw new Error("Video project was not found");
+      return project;
     }),
   }),
 });
