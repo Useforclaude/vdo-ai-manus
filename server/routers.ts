@@ -7,6 +7,7 @@ import * as db from "./db";
 import { createJobId, interpretVideoCommand, previewClipSilences } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 import { subtitleStyleForPreset } from "@shared/subtitles";
+import { createAiProducerDraft, listAiProducerModels } from "./aiProducer";
 
 const subtitleStyleInput = z.object({
   font: z.enum(["Noto Sans Thai", "Arial", "Inter"]).default("Noto Sans Thai"),
@@ -62,6 +63,46 @@ export const appRouter = router({
     listCustomSubtitlePresets: publicProcedure.query(async ({ ctx }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
       return db.listSubtitlePresetsForUser(actor.userId);
+    }),
+    listAiModels: publicProcedure.query(async () => listAiProducerModels()),
+    draftAiEdit: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      prompt: z.string().trim().min(2).max(1200),
+      model: z.string().trim().min(1).max(160).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
+      if (!project) throw new Error("Video project was not found");
+      return createAiProducerDraft(input.prompt, input.model);
+    }),
+    listMcpAccessTokens: publicProcedure.input(z.object({ projectId: z.number().int().positive().optional() }).optional()).query(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      return db.listMcpAccessTokensForUser(actor.userId, input?.projectId);
+    }),
+    createMcpAccessToken: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      label: z.string().trim().min(1).max(80),
+      scope: z.enum(["read", "edit", "render"]),
+      expiresInDays: z.union([z.literal(1), z.literal(7), z.literal(30)]),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const created = await db.createMcpAccessToken({
+        userId: actor.userId,
+        projectId: input.projectId,
+        label: input.label,
+        scope: input.scope,
+        expiresAt: new Date(Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000),
+      });
+      if (!created) throw new Error("Video project was not found");
+      return created;
+    }),
+    revokeMcpAccessToken: publicProcedure.input(z.object({ tokenId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      const revoked = await db.revokeMcpAccessToken(input.tokenId, actor.userId);
+      if (!revoked) throw new Error("MCP access token was not found");
+      return { success: true } as const;
     }),
     createJob: publicProcedure.input(z.object({
       projectId: z.number().int().positive(),

@@ -3,6 +3,8 @@ import type { TrpcContext } from "./_core/context";
 
 const mocks = vi.hoisted(() => ({
   createEditJob: vi.fn(),
+  createAiProducerDraft: vi.fn(),
+  createMcpAccessToken: vi.fn(),
   createSubtitlePreset: vi.fn(),
   deleteSubtitlePreset: vi.fn(),
   duplicateVideoProject: vi.fn(),
@@ -14,8 +16,11 @@ const mocks = vi.hoisted(() => ({
   listVideoClips: vi.fn(),
   previewClipSilences: vi.fn(),
   listEditJobsForUser: vi.fn(),
+  listAiProducerModels: vi.fn(),
+  listMcpAccessTokensForUser: vi.fn(),
   renameVideoProject: vi.fn(),
   reorderVideoClips: vi.fn(),
+  revokeMcpAccessToken: vi.fn(),
   setProjectRetention: vi.fn(),
   softDeleteEditJob: vi.fn(),
   softDeleteProject: vi.fn(),
@@ -27,17 +32,20 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./db", () => ({
   createEditJob: mocks.createEditJob,
+  createMcpAccessToken: mocks.createMcpAccessToken,
   createSubtitlePreset: mocks.createSubtitlePreset,
   deleteSubtitlePreset: mocks.deleteSubtitlePreset,
   duplicateVideoProject: mocks.duplicateVideoProject,
   getVideoProjectForUser: mocks.getVideoProjectForUser,
   getSubtitlePresetForUser: mocks.getSubtitlePresetForUser,
   listEditJobsForUser: mocks.listEditJobsForUser,
+  listMcpAccessTokensForUser: mocks.listMcpAccessTokensForUser,
   listProjectsForUser: mocks.listProjectsForUser,
   listSubtitlePresetsForUser: mocks.listSubtitlePresetsForUser,
   listVideoClips: mocks.listVideoClips,
   renameVideoProject: mocks.renameVideoProject,
   reorderVideoClips: mocks.reorderVideoClips,
+  revokeMcpAccessToken: mocks.revokeMcpAccessToken,
   setProjectRetention: mocks.setProjectRetention,
   softDeleteEditJob: mocks.softDeleteEditJob,
   softDeleteProject: mocks.softDeleteProject,
@@ -50,6 +58,11 @@ vi.mock("./videoEditing", () => ({
   createJobId: () => "job_test_001",
   interpretVideoCommand: mocks.interpretVideoCommand,
   previewClipSilences: mocks.previewClipSilences,
+}));
+
+vi.mock("./aiProducer", () => ({
+  createAiProducerDraft: mocks.createAiProducerDraft,
+  listAiProducerModels: mocks.listAiProducerModels,
 }));
 
 vi.mock("./videoActor", () => ({ resolveVideoActor: mocks.resolveVideoActor }));
@@ -283,5 +296,33 @@ describe("video router", () => {
 
     mocks.deleteSubtitlePreset.mockResolvedValue(false);
     await expect(caller.video.deleteCustomSubtitlePreset({ presetId: 99 })).rejects.toThrow("Custom subtitle preset was not found");
+  });
+
+  it("drafts an AI command only for the current guest project without creating a render job", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 55, userId: 101, title: "Interview cut" });
+    mocks.createAiProducerDraft.mockResolvedValue({ command: "ตัดช่วงเงียบ", selectedModel: "gemini-2.5-flash", summary: "ตัดช่วงเงียบ", operations: [], sourceLanguage: "th" });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.draftAiEdit({ projectId: 55, prompt: "ตัดช่วงเงียบ", model: "gemini-2.5-flash" })).resolves.toMatchObject({ selectedModel: "gemini-2.5-flash" });
+
+    expect(mocks.createAiProducerDraft).toHaveBeenCalledWith("ตัดช่วงเงียบ", "gemini-2.5-flash");
+    expect(mocks.createEditJob).not.toHaveBeenCalled();
+  });
+
+  it("creates and revokes MCP capability tokens only under the current guest owner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T00:00:00.000Z"));
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.createMcpAccessToken.mockResolvedValue({ token: "cfmcp_secret", access: { id: 8, projectId: 55, userId: 101, scope: "edit" } });
+    mocks.revokeMcpAccessToken.mockResolvedValue(true);
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.createMcpAccessToken({ projectId: 55, label: "Claude Desktop", scope: "edit", expiresInDays: 7 })).resolves.toMatchObject({ token: "cfmcp_secret" });
+    await expect(caller.video.revokeMcpAccessToken({ tokenId: 8 })).resolves.toEqual({ success: true });
+
+    expect(mocks.createMcpAccessToken).toHaveBeenCalledWith(expect.objectContaining({ userId: 101, projectId: 55, scope: "edit", expiresAt: new Date("2026-08-20T00:00:00.000Z") }));
+    expect(mocks.revokeMcpAccessToken).toHaveBeenCalledWith(8, 101);
+    vi.useRealTimers();
   });
 });

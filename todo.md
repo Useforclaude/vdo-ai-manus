@@ -71,3 +71,12 @@
 - [x] เพิ่ม preview ช่วงเงียบจากเสียงคลิปก่อนส่งงาน FFmpeg render
 - [x] เพิ่ม export/import preset ของโปรเจกต์เพื่อเรียกใช้รูปแบบตัดต่อซ้ำอย่างปลอดภัย
 - [x] เพิ่ม Vitest และ browser E2E สำหรับ undo/redo, preview ช่วงเงียบ และ export/import preset
+- [x] ตรวจ connector ที่มีอยู่และกำหนดรูปแบบ MCP หรือ AI agent สำหรับสั่ง Cineflow
+- [x] ออกแบบสิทธิ์ guest และสัญญาคำสั่งของ AI agent สำหรับโครงการและคลิปที่เลือก
+- [x] เชื่อม AI agent หรือ MCP เข้ากับหน้าควบคุมคำสั่งของ Cineflow
+- [x] เพิ่ม Vitest และ browser E2E ยืนยันการสั่งงานผ่าน AI agent และการแยกสิทธิ์
+- [x] ออกแบบ registry สำหรับเลือก AI provider และนโยบาย fallback โดยไม่เปิดเผย credential ต่อ browser
+- [x] เพิ่ม MCP server ของ Cineflow พร้อม tools ที่จำกัดสิทธิ์ต่อ guest project
+- [x] เพิ่มหน้า AI producer ให้ร่างแผนคำสั่งและให้ผู้ใช้ยืนยันก่อนสร้างงานตัดต่อ
+- [x] รองรับโมเดล OpenAI, Anthropic และ Google Gemini ที่ปรากฏใน model catalog ผ่าน server proxy โดยไม่เปิดเผย credential ต่อ browser
+- [x] เพิ่มเอกสารการเชื่อม MCP client และชุดทดสอบอัตโนมัติสำหรับ AI provider กับ MCP tools

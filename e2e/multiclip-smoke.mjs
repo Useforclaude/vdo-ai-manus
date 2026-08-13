@@ -80,6 +80,25 @@ try {
   await library.getByRole("button", { name: /Copy of E2E Timeline Studio/ }).click();
   await library.waitFor({ state: "hidden", timeout: 10_000 });
 
+  await page.getByLabel("AI producer prompt").fill("สร้างซับไทยและตัดช่วงเงียบ");
+  const aiDrafted = page.waitForResponse(response => response.url().includes("video.draftAiEdit") && response.ok(), { timeout: 30_000 });
+  await page.getByLabel("Plan with AI producer").click();
+  await aiDrafted;
+  await page.getByRole("button", { name: "Use draft" }).waitFor({ state: "visible", timeout: 10_000 });
+  await page.getByRole("button", { name: "Use draft" }).click();
+
+  await page.getByLabel("MCP token label").fill("E2E Agent");
+  await page.getByLabel("MCP token scope").selectOption("edit");
+  const tokenCreated = page.waitForResponse(response => response.url().includes("video.createMcpAccessToken") && response.ok(), { timeout: 10_000 });
+  await page.getByLabel("Create MCP access token").click();
+  await tokenCreated;
+  await page.getByText("Displayed once — save securely", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  await page.getByText(/^cfmcp_/).waitFor({ state: "visible", timeout: 10_000 });
+  page.once("dialog", dialog => dialog.accept());
+  const tokenRevoked = page.waitForResponse(response => response.url().includes("video.revokeMcpAccessToken") && response.ok(), { timeout: 10_000 });
+  await page.getByLabel("Revoke MCP token E2E Agent").click();
+  await tokenRevoked;
+
   const presetDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export preset" }).click();
   const exportedPreset = await presetDownload;
@@ -89,7 +108,7 @@ try {
   await page.getByLabel("Import project preset").setInputFiles(exportedPresetPath);
   await page.getByText("นำ preset โครงการมาใช้แล้ว").waitFor({ state: "visible", timeout: 10_000 });
 
-  const command = page.locator("textarea");
+  const command = page.locator("textarea").last();
   await command.fill("Create subtitles");
   await page.getByText("Subtitle style for this edit").waitFor({ state: "visible", timeout: 10_000 });
   await page.getByRole("button", { name: /Thai Story/ }).click();
@@ -112,7 +131,7 @@ try {
   console.log(JSON.stringify({
     status: "passed",
     previewUrl,
-    checks: ["two uploads", "selected preview", "silence preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim with undo/redo", "project rename and library open", "project duplication", "project preset export/import", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
+    checks: ["two uploads", "selected preview", "silence preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim with undo/redo", "project rename and library open", "project duplication", "AI producer draft", "MCP token create and revoke", "project preset export/import", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
   }));
 } finally {
   await browser.close();

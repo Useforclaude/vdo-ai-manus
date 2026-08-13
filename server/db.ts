@@ -1,4 +1,5 @@
 import { and, asc, desc, eq, gt, inArray, isNull, like, lt, or } from "drizzle-orm";
+import { createHash, randomBytes } from "node:crypto";
 import { drizzle } from "drizzle-orm/mysql2";
 import {
   editJobs,
@@ -11,6 +12,7 @@ import {
   users,
   videoClips,
   videoProjects,
+  mcpAccessTokens,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -252,6 +254,79 @@ export async function deleteSubtitlePreset(presetId: number, userId: number) {
   const db = requireDb(await getDb());
   await db.delete(subtitlePresets).where(and(eq(subtitlePresets.id, presetId), eq(subtitlePresets.userId, userId)));
   return true;
+}
+
+export type McpTokenScope = "read" | "edit" | "render";
+
+function hashMcpToken(token: string) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function toPublicMcpToken(token: typeof mcpAccessTokens.$inferSelect) {
+  const { tokenHash: _tokenHash, ...safeToken } = token;
+  return safeToken;
+}
+
+export async function createMcpAccessToken(values: {
+  userId: number;
+  projectId: number;
+  label: string;
+  scope: McpTokenScope;
+  expiresAt: Date;
+}) {
+  const project = await getVideoProjectForUser(values.projectId, values.userId);
+  if (!project) return undefined;
+  const db = requireDb(await getDb());
+  const rawToken = `cfmcp_${randomBytes(30).toString("base64url")}`;
+  const result = await db.insert(mcpAccessTokens).values({
+    ...values,
+    tokenHash: hashMcpToken(rawToken),
+  });
+  const rows = await db.select().from(mcpAccessTokens).where(eq(mcpAccessTokens.id, Number(result[0].insertId))).limit(1);
+  if (!rows[0]) throw new Error("Unable to create MCP access token");
+  return { token: rawToken, access: toPublicMcpToken(rows[0]) };
+}
+
+export async function listMcpAccessTokensForUser(userId: number, projectId?: number) {
+  const db = requireDb(await getDb());
+  const tokens = await db.select().from(mcpAccessTokens).where(and(
+    eq(mcpAccessTokens.userId, userId),
+    projectId ? eq(mcpAccessTokens.projectId, projectId) : undefined,
+  )).orderBy(desc(mcpAccessTokens.createdAt));
+  return tokens.map(toPublicMcpToken);
+}
+
+export async function revokeMcpAccessToken(tokenId: number, userId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(mcpAccessTokens).where(and(
+    eq(mcpAccessTokens.id, tokenId),
+    eq(mcpAccessTokens.userId, userId),
+    isNull(mcpAccessTokens.revokedAt),
+  )).limit(1);
+  if (!rows[0]) return false;
+  await db.update(mcpAccessTokens).set({ revokedAt: new Date() }).where(and(
+    eq(mcpAccessTokens.id, tokenId),
+    eq(mcpAccessTokens.userId, userId),
+    isNull(mcpAccessTokens.revokedAt),
+  ));
+  return true;
+}
+
+export async function resolveMcpAccessToken(rawToken: string) {
+  if (!/^cfmcp_[A-Za-z0-9_-]{30,}$/.test(rawToken)) return undefined;
+  const db = requireDb(await getDb());
+  const now = new Date();
+  const rows = await db.select().from(mcpAccessTokens).where(and(
+    eq(mcpAccessTokens.tokenHash, hashMcpToken(rawToken)),
+    isNull(mcpAccessTokens.revokedAt),
+    gt(mcpAccessTokens.expiresAt, now),
+  )).limit(1);
+  const token = rows[0];
+  if (!token) return undefined;
+  const project = await getVideoProjectForUser(token.projectId, token.userId);
+  if (!project) return undefined;
+  await db.update(mcpAccessTokens).set({ lastUsedAt: now }).where(eq(mcpAccessTokens.id, token.id));
+  return { ...toPublicMcpToken(token), userId: token.userId, projectId: token.projectId };
 }
 
 export async function softDeleteProject(projectId: number, userId: number) {

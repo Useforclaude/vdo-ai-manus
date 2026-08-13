@@ -3,9 +3,11 @@ import { toast } from "sonner";
 import {
   ArrowDown,
   ArrowUp,
+  Bot,
   Captions,
   CheckCircle2,
   ChevronRight,
+  ClipboardCopy,
   Clock3,
   Copy,
   Download,
@@ -13,6 +15,8 @@ import {
   Film,
   FolderOpen,
   Languages,
+  KeyRound,
+  Link2,
   Loader2,
   PencilLine,
   Play,
@@ -22,6 +26,8 @@ import {
   Save,
   Scissors,
   Search,
+  Send,
+  ShieldCheck,
   Sparkles,
   Trash2,
   UploadCloud,
@@ -71,6 +77,29 @@ type SilencePreview = {
   timelineDurationMs: number;
   removedDurationMs: number;
   silenceRanges: Array<{ startMs: number; endMs: number; durationMs: number }>;
+};
+
+type AiModelOption = {
+  id: string;
+  provider: "OpenAI" | "Anthropic" | "Google" | "Other";
+  label: string;
+};
+
+type AiDraft = {
+  command: string;
+  selectedModel: string | null;
+  summary: string;
+  operations: Array<{ type: string }>;
+  sourceLanguage: "th" | "en";
+};
+
+type McpToken = {
+  id: number;
+  label: string;
+  scope: "read" | "edit" | "render";
+  expiresAt: Date;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
 };
 
 const prompts = ["ตัดช่วงเงียบทั้งหมด", "สร้างซับไตเติลอัตโนมัติ", "Crop video to 16:9", "Keep the first 30 seconds"];
@@ -136,6 +165,13 @@ export default function Home() {
   const [timelineHistory, setTimelineHistory] = useState<TimelineSnapshot[]>([]);
   const [timelineRedoHistory, setTimelineRedoHistory] = useState<TimelineSnapshot[]>([]);
   const [silencePreview, setSilencePreview] = useState<SilencePreview | null>(null);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [selectedAiModel, setSelectedAiModel] = useState("");
+  const [aiDraft, setAiDraft] = useState<AiDraft | null>(null);
+  const [mcpTokenLabel, setMcpTokenLabel] = useState("AI editor access");
+  const [mcpTokenScope, setMcpTokenScope] = useState<"read" | "edit" | "render">("render");
+  const [mcpTokenDays, setMcpTokenDays] = useState<1 | 7 | 30>(7);
+  const [issuedMcpToken, setIssuedMcpToken] = useState<{ token: string; access: McpToken } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const projectPresetInputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
@@ -160,8 +196,15 @@ export default function Home() {
   const createCustomSubtitlePreset = trpc.video.createCustomSubtitlePreset.useMutation();
   const updateCustomSubtitlePreset = trpc.video.updateCustomSubtitlePreset.useMutation();
   const deleteCustomSubtitlePreset = trpc.video.deleteCustomSubtitlePreset.useMutation();
+  const aiModelsQuery = trpc.video.listAiModels.useQuery(undefined, { staleTime: 5 * 60 * 1000 });
+  const draftAiEdit = trpc.video.draftAiEdit.useMutation();
+  const mcpTokensQuery = trpc.video.listMcpAccessTokens.useQuery(project ? { projectId: project.id } : undefined, { enabled: Boolean(project) });
+  const createMcpAccessToken = trpc.video.createMcpAccessToken.useMutation();
+  const revokeMcpAccessToken = trpc.video.revokeMcpAccessToken.useMutation();
   const clips = clipsQuery.data ?? [];
   const customPresets = (customPresetsQuery.data ?? []) as CustomSubtitlePreset[];
+  const aiModels = (aiModelsQuery.data ?? []) as AiModelOption[];
+  const mcpTokens = (mcpTokensQuery.data ?? []) as McpToken[];
   const selectedClip = clips.find(clip => clip.id === selectedClipId);
   const editableDurationMs = Math.max(1_000, Math.min(180_000, Math.round(previewDurationMs || selectedClip?.trimEndMs || 180_000)));
   const previewUrl = temporaryPreview || selectedClip?.storageUrl || "";
@@ -172,6 +215,7 @@ export default function Home() {
     return new Date(project.expiresAt).getTime() - Date.now() <= 14 * 24 * 60 * 60 * 1000 ? "seven_days" : "thirty_days";
   }, [project?.expiresAt]);
   const requestsSubtitles = subtitleRequest.test(command);
+  const mcpEndpoint = typeof window === "undefined" ? "/api/mcp" : `${window.location.origin}/api/mcp`;
 
   useEffect(() => {
     const available = projectsQuery.data ?? [];
@@ -191,6 +235,8 @@ export default function Home() {
   useEffect(() => {
     setTimelineHistory([]);
     setTimelineRedoHistory([]);
+    setAiDraft(null);
+    setIssuedMcpToken(null);
   }, [project?.id]);
 
   useEffect(() => {
@@ -299,6 +345,77 @@ export default function Home() {
       else toast.success(preview.silenceRanges.length ? `พบช่วงเงียบ ${preview.silenceRanges.length} ช่วง` : "ไม่พบช่วงเงียบตามเกณฑ์ที่ตั้งไว้");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "ไม่สามารถตรวจช่วงเงียบได้");
+    }
+  }
+
+  async function produceAiDraft() {
+    if (!project) {
+      toast.info("อัปโหลดวิดีโอก่อน แล้วจึงให้ AI วางแผนตัดต่อ");
+      return;
+    }
+    if (aiPrompt.trim().length < 2) {
+      toast.error("อธิบายสิ่งที่ต้องการให้ AI producer อย่างน้อย 2 ตัวอักษร");
+      return;
+    }
+    try {
+      const draft = await draftAiEdit.mutateAsync({ projectId: project.id, prompt: aiPrompt.trim(), model: selectedAiModel || undefined });
+      setAiDraft(draft as AiDraft);
+      setCommand(draft.command);
+      toast.success("AI producer วางแผนแล้ว — ตรวจสอบก่อนสร้างงาน render");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "AI producer ยังวางแผนคำสั่งไม่ได้");
+    }
+  }
+
+  function applyAiDraft() {
+    if (!aiDraft) return;
+    setCommand(aiDraft.command);
+    toast.success("ย้ายคำสั่งจาก AI producer ไปยังตัวแก้ไขแล้ว");
+  }
+
+  async function issueMcpToken() {
+    if (!project) return;
+    try {
+      const issued = await createMcpAccessToken.mutateAsync({
+        projectId: project.id,
+        label: mcpTokenLabel.trim() || "AI editor access",
+        scope: mcpTokenScope,
+        expiresInDays: mcpTokenDays,
+      });
+      setIssuedMcpToken(issued as { token: string; access: McpToken });
+      await utils.video.listMcpAccessTokens.invalidate({ projectId: project.id });
+      toast.success("สร้าง MCP access token แล้ว — คัดลอกทันที เพราะจะแสดงเพียงครั้งเดียว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถสร้าง MCP access token ได้");
+    }
+  }
+
+  async function copyMcpSetup() {
+    if (!issuedMcpToken) return;
+    const config = JSON.stringify({
+      mcpServers: {
+        cineflow: {
+          url: mcpEndpoint,
+          headers: { Authorization: `Bearer ${issuedMcpToken.token}` },
+        },
+      },
+    }, null, 2);
+    try {
+      await navigator.clipboard.writeText(config);
+      toast.success("คัดลอกตัวอย่างการเชื่อม MCP แล้ว");
+    } catch {
+      toast.info("เลือกและคัดลอก token ด้านล่างด้วยตนเอง");
+    }
+  }
+
+  async function revokeToken(token: McpToken) {
+    if (!window.confirm(`เพิกถอน MCP token “${token.label}” หรือไม่? AI ที่ใช้ token นี้จะสั่งโปรเจกต์ไม่ได้ทันที`)) return;
+    try {
+      await revokeMcpAccessToken.mutateAsync({ tokenId: token.id });
+      if (project) await utils.video.listMcpAccessTokens.invalidate({ projectId: project.id });
+      toast.success("เพิกถอน MCP token แล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถเพิกถอน MCP token ได้");
     }
   }
 
@@ -624,6 +741,22 @@ export default function Home() {
         {project && <section className="mb-5 rounded-2xl border border-[#dce5d5] bg-[#f8fbf4] px-4 py-3 shadow-[0_12px_36px_rgba(31,43,37,.04)]"><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="flex items-center gap-3"><div className="grid size-8 place-items-center rounded-lg bg-[#e8f3d8] text-[#597d3b]"><Clock3 size={15} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Timeline tools</p><p className="text-[11px] text-[#6e7c73]">Undo/redo ใช้กับการเรียงคลิปและช่วง trim ที่บันทึกแล้ว</p></div></div><div className="flex flex-wrap items-center gap-2"><button aria-label="Undo timeline" onClick={() => void undoTimeline()} disabled={!timelineHistory.length || reorderClips.isPending || setClipTrim.isPending} className="inline-flex items-center gap-1.5 rounded-lg border border-[#d3e0ca] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#456145] transition hover:bg-[#eef6e7] disabled:cursor-not-allowed disabled:opacity-35"><RotateCcw size={13} /> Undo</button><button aria-label="Redo timeline" onClick={() => void redoTimeline()} disabled={!timelineRedoHistory.length || reorderClips.isPending || setClipTrim.isPending} className="inline-flex items-center gap-1.5 rounded-lg border border-[#d3e0ca] bg-white px-2.5 py-1.5 text-[10px] font-semibold text-[#456145] transition hover:bg-[#eef6e7] disabled:cursor-not-allowed disabled:opacity-35"><RotateCw size={13} /> Redo</button>{selectedClip && <button aria-label="Preview silence" onClick={() => void loadSilencePreview()} disabled={previewClipSilences.isPending} className="inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-1.5 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-50">{previewClipSilences.isPending ? <Loader2 className="size-3 animate-spin" /> : <Play className="size-3" />} Preview silence</button>}</div></div>{selectedClip && <div className="mt-3 rounded-xl border border-[#e0e7d9] bg-white px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[10px] font-semibold text-[#50694d]">{silencePreview ? silencePreview.hasAudio ? silencePreview.silenceRanges.length ? `พบ ${silencePreview.silenceRanges.length} ช่วงเงียบ — จะลบประมาณ ${(silencePreview.removedDurationMs / 1000).toFixed(1)} วินาที` : "ไม่พบช่วงเงียบตามเกณฑ์ของ Cineflow" : "คลิปนี้ไม่มีแทร็กเสียง" : "กด Preview silence เพื่อตรวจช่วงที่คำสั่ง “ตัดช่วงเงียบ” จะลบก่อน render"}</p>{silencePreview?.hasAudio && silencePreview.silenceRanges.length > 0 && <span className="text-[9px] font-medium text-[#88734b]">Preview only · ไฟล์ยังไม่ถูกเปลี่ยน</span>}</div>{silencePreview?.hasAudio && silencePreview.silenceRanges.length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{silencePreview.silenceRanges.slice(0, 5).map(silence => <span key={`${silence.startMs}-${silence.endMs}`} className="rounded-full bg-amber-50 px-2 py-1 text-[9px] font-medium text-[#856b37]">{(silence.startMs / 1000).toFixed(1)}–{(silence.endMs / 1000).toFixed(1)}s</span>)}{silencePreview.silenceRanges.length > 5 && <span className="rounded-full bg-stone-100 px-2 py-1 text-[9px] font-medium text-[#758078]">+{silencePreview.silenceRanges.length - 5} ช่วง</span>}</div>}</div>}</section>}
 
         {project && <section className="mb-5 flex flex-col gap-3 rounded-2xl border border-[#dce5d5] bg-white px-4 py-3 shadow-[0_12px_36px_rgba(31,43,37,.04)] sm:flex-row sm:items-center sm:justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Project preset</p><p className="mt-0.5 text-[11px] leading-4 text-[#6e7c73]">บันทึกคำสั่ง รูปแบบซับ ลำดับคลิป และ trim ไว้ใช้กับชุดคลิปชื่อเดิม โดยไม่ส่งออกวิดีโอหรือ URL</p></div><div className="flex shrink-0 items-center gap-2"><input ref={projectPresetInputRef} aria-label="Import project preset" type="file" accept="application/json,.json" onChange={event => void importProjectPreset(event)} className="hidden" /><button onClick={() => projectPresetInputRef.current?.click()} disabled={reorderClips.isPending || setClipTrim.isPending} className="rounded-lg border border-[#d3e0ca] bg-[#f8fbf4] px-3 py-2 text-[10px] font-semibold text-[#496a4b] transition hover:bg-[#edf6e4] disabled:opacity-40">Import preset</button><button onClick={exportProjectPreset} disabled={!clips.length} className="inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-40"><Download size={12} /> Export preset</button></div></section>}
+
+        {project && <section className="mb-5 grid gap-5 xl:grid-cols-2">
+          <div className="rounded-[22px] border border-[#d7e5d5] bg-[#f6fbf1] p-4 shadow-[0_12px_36px_rgba(31,43,37,.04)]">
+            <div className="mb-3 flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#1f4035] text-[#c5f165]"><Bot size={17} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#557a48]">AI producer</p><h2 className="mt-0.5 font-display text-lg font-semibold tracking-[-.035em] text-[#21332b]">Plan with any available model</h2><p className="mt-1 text-[10px] leading-4 text-[#718078]">AI จะร่างคำสั่งให้ก่อนเสมอ คุณตรวจและยืนยัน render เองได้</p></div></div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_168px]"><textarea aria-label="AI producer prompt" value={aiPrompt} onChange={event => setAiPrompt(event.target.value)} placeholder="เช่น ทำคลิปแนวกระชับ ตัดช่วงเงียบ ใส่ซับไทย และครอป 16:9" className="min-h-[78px] resize-none rounded-xl border border-[#d4e1d0] bg-white px-3 py-2.5 text-xs leading-5 outline-none transition focus:border-[#8eb55b] focus:ring-4 focus:ring-[#e5f1d5]" /><label className="text-[10px] font-semibold text-[#60746a]">MODEL<select aria-label="AI producer model" value={selectedAiModel} onChange={event => setSelectedAiModel(event.target.value)} className="mt-1.5 block w-full rounded-lg border border-[#d4e1d0] bg-white px-2.5 py-2 text-xs font-medium text-[#2b4235] outline-none"><option value="">Auto-select best model</option>{aiModels.map(model => <option key={model.id} value={model.id}>{model.provider} · {model.label}</option>)}</select><button aria-label="Plan with AI producer" onClick={() => void produceAiDraft()} disabled={draftAiEdit.isPending || !aiPrompt.trim()} className="mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-45">{draftAiEdit.isPending ? <Loader2 className="size-3 animate-spin" /> : <Send size={12} />} Plan edit</button></label></div>
+            {aiDraft && <div className="mt-3 rounded-xl border border-[#d3e5ca] bg-white p-3"><div className="flex items-start justify-between gap-3"><div><p className="text-[10px] font-bold text-[#416440]">{aiDraft.summary}</p><p className="mt-1 text-[10px] text-[#718078]">{aiDraft.operations.map(operation => planLabel(operation.type)).join(" · ") || "พร้อมร่างคำสั่ง"} · {aiDraft.sourceLanguage === "th" ? "Thai" : "English"}</p></div><button onClick={applyAiDraft} className="shrink-0 rounded-lg border border-[#cedfc7] bg-[#f5faef] px-2 py-1.5 text-[10px] font-semibold text-[#496d42] transition hover:bg-[#e9f4df]">Use draft</button></div><p className="mt-2 rounded-lg bg-[#f7faf5] px-2.5 py-2 text-[10px] leading-4 text-[#586960]">{aiDraft.command}</p></div>}
+          </div>
+
+          <div className="rounded-[22px] border border-[#d5e1d5] bg-white p-4 shadow-[0_12px_36px_rgba(31,43,37,.04)]">
+            <div className="mb-3 flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-xl bg-[#eaf4dc] text-[#557d38]"><Link2 size={17} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#557a48]">MCP access</p><h2 className="mt-0.5 font-display text-lg font-semibold tracking-[-.035em] text-[#21332b]">Connect Claude, Cursor, n8n & agents</h2><p className="mt-1 text-[10px] leading-4 text-[#718078]">สร้าง Bearer token เฉพาะโปรเจกต์ แล้วกำหนดขอบเขต read, edit หรือ render</p></div></div>
+            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_104px_92px]"><input aria-label="MCP token label" value={mcpTokenLabel} maxLength={80} onChange={event => setMcpTokenLabel(event.target.value)} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2.5 py-2 text-xs outline-none focus:border-[#91b85e]" /><select aria-label="MCP token scope" value={mcpTokenScope} onChange={event => setMcpTokenScope(event.target.value as "read" | "edit" | "render")} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2 py-2 text-[10px] font-semibold text-[#466446] outline-none"><option value="read">Read only</option><option value="edit">Edit timeline</option><option value="render">Render</option></select><select aria-label="MCP token expiry" value={mcpTokenDays} onChange={event => setMcpTokenDays(Number(event.target.value) as 1 | 7 | 30)} className="rounded-lg border border-[#d9e2d5] bg-[#fbfcfa] px-2 py-2 text-[10px] font-semibold text-[#466446] outline-none"><option value={1}>1 day</option><option value={7}>7 days</option><option value={30}>30 days</option></select></div>
+            <button aria-label="Create MCP access token" onClick={() => void issueMcpToken()} disabled={createMcpAccessToken.isPending} className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-45">{createMcpAccessToken.isPending ? <Loader2 className="size-3 animate-spin" /> : <KeyRound size={12} />} Create scoped token</button>
+            {issuedMcpToken && <div className="mt-3 rounded-xl border border-[#cfe3c7] bg-[#f4faed] p-3"><div className="flex items-center justify-between gap-2"><p className="inline-flex items-center gap-1 text-[10px] font-bold text-[#416440]"><ShieldCheck size={12} /> Displayed once — save securely</p><button aria-label="Copy MCP configuration" onClick={() => void copyMcpSetup()} className="inline-flex items-center gap-1 rounded-md border border-[#c6ddbd] bg-white px-2 py-1 text-[9px] font-semibold text-[#496d42]"><ClipboardCopy size={11} /> Copy config</button></div><p className="mt-2 break-all rounded-lg bg-white px-2.5 py-2 font-mono text-[9px] text-[#45574b]">{issuedMcpToken.token}</p><p className="mt-2 text-[9px] leading-4 text-[#6c7e71]">Endpoint: <span className="font-mono">{mcpEndpoint}</span></p></div>}
+            {mcpTokens.length > 0 && <div className="mt-3 border-t border-[#e2e9df] pt-3"><p className="mb-1.5 text-[9px] font-bold uppercase tracking-[.11em] text-[#708078]">Active project tokens</p><div className="space-y-1.5">{mcpTokens.filter(token => !token.revokedAt).map(token => <div key={token.id} className="flex items-center justify-between gap-2 rounded-lg bg-[#f8faf7] px-2.5 py-2"><p className="min-w-0 truncate text-[10px] font-semibold text-[#405b45]">{token.label} <span className="font-normal text-[#77847d]">· {token.scope} · expires {new Date(token.expiresAt).toLocaleDateString()}</span></p><button aria-label={`Revoke MCP token ${token.label}`} onClick={() => void revokeToken(token)} disabled={revokeMcpAccessToken.isPending} className="rounded px-1.5 py-1 text-[9px] font-semibold text-[#9c625b] transition hover:bg-rose-50 disabled:opacity-40">Revoke</button></div>)}</div></div>}
+          </div>
+        </section>}
 
         <div className="grid gap-5 xl:grid-cols-[minmax(0,1.55fr)_390px]">
           <section className="overflow-hidden rounded-[24px] border border-[#dfdfd9] bg-[#1b2421] shadow-[0_20px_60px_rgba(31,43,37,.08)]">

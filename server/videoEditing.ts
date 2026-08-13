@@ -63,11 +63,13 @@ function parsePlanContent(content: string): EditPlan {
   return JSON.parse(normalized) as EditPlan;
 }
 
-export async function interpretVideoCommand(command: string): Promise<EditPlan> {
+export async function interpretVideoCommand(command: string, requestedModel?: string): Promise<EditPlan> {
   const fallback = fallbackPlan(command);
   try {
     const { data: models } = await listLLMModels();
-    const model = models.find(modelInfo => modelInfo.id === "gpt-5-mini")?.id ?? models[0]?.id;
+    const model = models.find(modelInfo => modelInfo.id === requestedModel)?.id
+      ?? models.find(modelInfo => modelInfo.id === "gpt-5-mini")?.id
+      ?? models[0]?.id;
     if (!model) return fallback;
     const response = await invokeLLM({
       model,
