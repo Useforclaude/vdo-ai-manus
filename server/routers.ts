@@ -14,6 +14,9 @@ const subtitleStyleInput = z.object({
   position: z.enum(["bottom", "middle", "top"]).default("bottom"),
 });
 const subtitlePresetInput = z.enum(["thai_standard", "thai_story", "thai_minimal", "custom"]);
+const customSubtitlePresetInput = subtitleStyleInput.extend({
+  name: z.string().trim().min(1).max(80),
+});
 
 export const appRouter = router({
   system: systemRouter,
@@ -43,19 +46,30 @@ export const appRouter = router({
       if (!project) throw new Error("Video project was not found");
       return db.listVideoClips(project.id, actor.userId);
     }),
+    listCustomSubtitlePresets: publicProcedure.query(async ({ ctx }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      return db.listSubtitlePresetsForUser(actor.userId);
+    }),
     createJob: publicProcedure.input(z.object({
       projectId: z.number().int().positive(),
       command: z.string().trim().min(2).max(1200),
       subtitleStyle: subtitleStyleInput.optional(),
       subtitlePreset: subtitlePresetInput.optional(),
+      customSubtitlePresetId: z.number().int().positive().optional(),
     })).mutation(async ({ ctx, input }) => {
       const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
       await db.sweepExpiredProjects(actor.userId);
       const project = await db.getVideoProjectForUser(input.projectId, actor.userId);
       if (!project) throw new Error("Video project was not found");
       const operationPlan = await interpretVideoCommand(input.command);
-      const subtitlePreset = input.subtitlePreset ?? "thai_standard";
-      const subtitleStyle = input.subtitleStyle ?? (subtitlePreset === "custom" ? subtitleStyleInput.parse({}) : subtitleStyleForPreset(subtitlePreset));
+      let subtitlePreset = input.subtitlePreset ?? "thai_standard";
+      let subtitleStyle = input.subtitleStyle ?? (subtitlePreset === "custom" ? subtitleStyleInput.parse({}) : subtitleStyleForPreset(subtitlePreset));
+      if (input.customSubtitlePresetId) {
+        const customPreset = await db.getSubtitlePresetForUser(input.customSubtitlePresetId, actor.userId);
+        if (!customPreset) throw new Error("Custom subtitle preset was not found");
+        subtitlePreset = "custom";
+        subtitleStyle = { font: customPreset.font as "Noto Sans Thai" | "Arial" | "Inter", size: customPreset.size, position: customPreset.position };
+      }
       return db.createEditJob({
         id: createJobId(),
         projectId: project.id,
@@ -80,6 +94,35 @@ export const appRouter = router({
       const project = await db.renameVideoProject(input.projectId, actor.userId, input.title);
       if (!project) throw new Error("Video project was not found");
       return project;
+    }),
+    duplicateProject: publicProcedure.input(z.object({
+      projectId: z.number().int().positive(),
+      title: z.string().trim().min(1).max(255).optional(),
+    })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      await db.sweepExpiredProjects(actor.userId);
+      const source = await db.getVideoProjectForUser(input.projectId, actor.userId);
+      if (!source) throw new Error("Video project was not found");
+      const duplicated = await db.duplicateVideoProject(source.id, actor.userId, input.title ?? `Copy of ${source.title}`);
+      if (!duplicated) throw new Error("Unable to duplicate the video project");
+      return duplicated;
+    }),
+    createCustomSubtitlePreset: publicProcedure.input(customSubtitlePresetInput).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      return db.createSubtitlePreset({ userId: actor.userId, ...input });
+    }),
+    updateCustomSubtitlePreset: publicProcedure.input(customSubtitlePresetInput.extend({ presetId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      const { presetId, ...values } = input;
+      const preset = await db.updateSubtitlePreset(presetId, actor.userId, values);
+      if (!preset) throw new Error("Custom subtitle preset was not found");
+      return preset;
+    }),
+    deleteCustomSubtitlePreset: publicProcedure.input(z.object({ presetId: z.number().int().positive() })).mutation(async ({ ctx, input }) => {
+      const actor = await resolveVideoActor(ctx.req, ctx.res, ctx.user);
+      const deleted = await db.deleteSubtitlePreset(input.presetId, actor.userId);
+      if (!deleted) throw new Error("Custom subtitle preset was not found");
+      return { success: true } as const;
     }),
     setClipTrim: publicProcedure.input(z.object({
       projectId: z.number().int().positive(),

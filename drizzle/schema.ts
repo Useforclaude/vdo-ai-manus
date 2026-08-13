@@ -47,6 +47,19 @@ export const videoClips = mysqlTable("video_clips", {
   index("video_clips_user_project_idx").on(table.userId, table.projectId),
 ]);
 
+export const subtitlePresets = mysqlTable("subtitle_presets", {
+  id: int("id").autoincrement().primaryKey(),
+  userId: int("user_id").notNull(),
+  name: varchar("name", { length: 80 }).notNull(),
+  font: varchar("font", { length: 120 }).notNull().default("Noto Sans Thai"),
+  size: mysqlEnum("size", ["small", "medium", "large"]).notNull().default("medium"),
+  position: mysqlEnum("position", ["bottom", "middle", "top"]).notNull().default("bottom"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+}, table => [
+  index("subtitle_presets_user_updated_idx").on(table.userId, table.updatedAt),
+]);
+
 export const editJobs = mysqlTable("edit_jobs", {
   id: varchar("id", { length: 64 }).primaryKey(),
   projectId: int("project_id").notNull(),
@@ -78,5 +91,7 @@ export type VideoProject = typeof videoProjects.$inferSelect;
 export type InsertVideoProject = typeof videoProjects.$inferInsert;
 export type VideoClip = typeof videoClips.$inferSelect;
 export type InsertVideoClip = typeof videoClips.$inferInsert;
+export type SubtitlePreset = typeof subtitlePresets.$inferSelect;
+export type InsertSubtitlePreset = typeof subtitlePresets.$inferInsert;
 export type EditJob = typeof editJobs.$inferSelect;
 export type InsertEditJob = typeof editJobs.$inferInsert;

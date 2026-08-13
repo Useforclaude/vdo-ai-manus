@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Clock3,
+  Copy,
   Download,
   FileVideo2,
   Film,
@@ -25,8 +26,9 @@ import {
   WandSparkles,
   X,
 } from "lucide-react";
-import { ChangeEvent, DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
+import { extractWaveformPeaks, type WaveformPeaks } from "@/lib/waveform";
 
 type Project = {
   id: number;
@@ -45,6 +47,14 @@ type Clip = {
   sizeBytes: number;
   trimStartMs?: number | null;
   trimEndMs?: number | null;
+};
+
+type CustomSubtitlePreset = {
+  id: number;
+  name: string;
+  font: "Noto Sans Thai" | "Arial" | "Inter";
+  size: "small" | "medium" | "large";
+  position: "bottom" | "middle" | "top";
 };
 
 const prompts = ["ตัดช่วงเงียบทั้งหมด", "สร้างซับไตเติลอัตโนมัติ", "Crop video to 16:9", "Keep the first 30 seconds"];
@@ -95,12 +105,18 @@ export default function Home() {
   const [previewDurationMs, setPreviewDurationMs] = useState(0);
   const [trimStartMs, setTrimStartMs] = useState(0);
   const [trimEndMs, setTrimEndMs] = useState(0);
+  const [waveformPeaks, setWaveformPeaks] = useState<WaveformPeaks>([]);
+  const [waveformStatus, setWaveformStatus] = useState<"idle" | "loading" | "ready" | "unavailable">("idle");
+  const [waveformTrimTarget, setWaveformTrimTarget] = useState<"start" | "end">("start");
   const [subtitlePreset, setSubtitlePreset] = useState<SubtitlePresetId>("thai_standard");
   const [subtitleStyle, setSubtitleStyle] = useState<{
     font: "Noto Sans Thai" | "Arial" | "Inter";
     size: "small" | "medium" | "large";
     position: "bottom" | "middle" | "top";
   }>({ font: "Noto Sans Thai", size: "medium", position: "bottom" });
+  const [newPresetName, setNewPresetName] = useState("");
+  const [selectedCustomPresetId, setSelectedCustomPresetId] = useState<number | null>(null);
+  const [customPresetDirty, setCustomPresetDirty] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const utils = trpc.useUtils();
   const projectsQuery = trpc.video.listProjects.useQuery();
@@ -118,7 +134,13 @@ export default function Home() {
   const setRetention = trpc.video.setProjectRetention.useMutation();
   const renameProject = trpc.video.renameProject.useMutation();
   const setClipTrim = trpc.video.setClipTrim.useMutation();
+  const duplicateProject = trpc.video.duplicateProject.useMutation();
+  const customPresetsQuery = trpc.video.listCustomSubtitlePresets.useQuery();
+  const createCustomSubtitlePreset = trpc.video.createCustomSubtitlePreset.useMutation();
+  const updateCustomSubtitlePreset = trpc.video.updateCustomSubtitlePreset.useMutation();
+  const deleteCustomSubtitlePreset = trpc.video.deleteCustomSubtitlePreset.useMutation();
   const clips = clipsQuery.data ?? [];
+  const customPresets = (customPresetsQuery.data ?? []) as CustomSubtitlePreset[];
   const selectedClip = clips.find(clip => clip.id === selectedClipId);
   const editableDurationMs = Math.max(1_000, Math.min(180_000, Math.round(previewDurationMs || selectedClip?.trimEndMs || 180_000)));
   const previewUrl = temporaryPreview || selectedClip?.storageUrl || "";
@@ -146,6 +168,29 @@ export default function Home() {
   }, [selectedClip?.id, selectedClip?.trimStartMs, selectedClip?.trimEndMs]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    if (!selectedClip?.storageUrl) {
+      setWaveformPeaks([]);
+      setWaveformStatus("idle");
+      return () => controller.abort();
+    }
+
+    setWaveformPeaks([]);
+    setWaveformStatus("loading");
+    void extractWaveformPeaks(selectedClip.storageUrl, 96, controller.signal)
+      .then(peaks => {
+        if (controller.signal.aborted) return;
+        setWaveformPeaks(peaks);
+        setWaveformStatus(peaks.length ? "ready" : "unavailable");
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setWaveformStatus("unavailable");
+      });
+
+    return () => controller.abort();
+  }, [selectedClip?.id, selectedClip?.storageUrl]);
+
+  useEffect(() => {
     setProjectTitleDraft(project?.title ?? "");
   }, [project?.id, project?.title]);
 
@@ -158,6 +203,7 @@ export default function Home() {
       utils.video.listProjects.invalidate(),
       utils.video.listClips.invalidate(),
       utils.video.listJobs.invalidate(),
+      utils.video.listCustomSubtitlePresets.invalidate(),
     ]);
   }
 
@@ -214,7 +260,13 @@ export default function Home() {
     }
     if (!command.trim()) return;
     try {
-      const job = await createJob.mutateAsync({ projectId: project.id, command, subtitleStyle, subtitlePreset });
+      const job = await createJob.mutateAsync({
+        projectId: project.id,
+        command,
+        subtitleStyle,
+        subtitlePreset,
+        customSubtitlePresetId: subtitlePreset === "custom" && selectedCustomPresetId && !customPresetDirty ? selectedCustomPresetId : undefined,
+      });
       setCommand("");
       await utils.video.listJobs.invalidate();
       toast.success("วิเคราะห์คำสั่งแล้ว กำลังเริ่มงานตัดต่อ");
@@ -275,6 +327,19 @@ export default function Home() {
     }
   }
 
+  async function duplicateCurrentProject() {
+    if (!project) return;
+    try {
+      const duplicated = await duplicateProject.mutateAsync({ projectId: project.id });
+      await refreshVideoData();
+      setSelectedProjectId(duplicated.id);
+      setSelectedClipId(null);
+      toast.success("ทำสำเนาโปรเจกต์แล้ว — ลองตัดต่ออีกเวอร์ชันได้ทันที");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถทำสำเนาโปรเจกต์ได้");
+    }
+  }
+
   async function saveClipTrim() {
     if (!project || !selectedClip) return;
     const normalizedEnd = trimEndMs || editableDurationMs;
@@ -302,8 +367,75 @@ export default function Home() {
     }
   }
 
+  function updateCustomStyle(update: Partial<typeof subtitleStyle>) {
+    setSubtitlePreset("custom");
+    setSubtitleStyle(current => ({ ...current, ...update }));
+    setCustomPresetDirty(true);
+  }
+
+  function chooseSavedSubtitlePreset(preset: CustomSubtitlePreset) {
+    setSubtitlePreset("custom");
+    setSubtitleStyle({ font: preset.font, size: preset.size, position: preset.position });
+    setSelectedCustomPresetId(preset.id);
+    setNewPresetName(preset.name);
+    setCustomPresetDirty(false);
+  }
+
+  async function saveCustomSubtitlePreset() {
+    const name = newPresetName.trim();
+    if (!name) {
+      toast.error("ตั้งชื่อ preset ก่อนบันทึก");
+      return;
+    }
+    try {
+      if (selectedCustomPresetId) {
+        await updateCustomSubtitlePreset.mutateAsync({ presetId: selectedCustomPresetId, name, ...subtitleStyle });
+        setCustomPresetDirty(false);
+        toast.success("อัปเดต preset ซับแล้ว");
+      } else {
+        const saved = await createCustomSubtitlePreset.mutateAsync({ name, ...subtitleStyle });
+        setSelectedCustomPresetId(saved.id);
+        setCustomPresetDirty(false);
+        toast.success("บันทึก preset ซับส่วนตัวแล้ว");
+      }
+      await utils.video.listCustomSubtitlePresets.invalidate();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถบันทึก preset ซับได้");
+    }
+  }
+
+  async function removeCustomSubtitlePreset(preset: CustomSubtitlePreset) {
+    if (!window.confirm(`ลบ preset “${preset.name}” หรือไม่?`)) return;
+    try {
+      await deleteCustomSubtitlePreset.mutateAsync({ presetId: preset.id });
+      if (selectedCustomPresetId === preset.id) {
+        setSelectedCustomPresetId(null);
+        setNewPresetName("");
+        setCustomPresetDirty(false);
+      }
+      await utils.video.listCustomSubtitlePresets.invalidate();
+      toast.success("ลบ preset ซับแล้ว");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "ไม่สามารถลบ preset ซับได้");
+    }
+  }
+
+  function setTrimFromWaveform(event: MouseEvent<HTMLButtonElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const ratio = Math.max(0, Math.min(1, (event.clientX - bounds.left) / bounds.width));
+    const selectedMs = Math.round((ratio * editableDurationMs) / 100) * 100;
+    if (waveformTrimTarget === "start") {
+      setTrimStartMs(Math.max(0, Math.min(selectedMs, (trimEndMs || editableDurationMs) - 500)));
+    } else {
+      setTrimEndMs(Math.min(editableDurationMs, Math.max(selectedMs, trimStartMs + 500)));
+    }
+  }
+
   function chooseSubtitlePreset(preset: SubtitlePresetId) {
     setSubtitlePreset(preset);
+    setSelectedCustomPresetId(null);
+    setNewPresetName("");
+    setCustomPresetDirty(false);
     if (preset !== "custom") setSubtitleStyle(SUBTITLE_PRESETS[preset].style);
   }
 
@@ -330,7 +462,7 @@ export default function Home() {
               {previewUrl ? <video controls onLoadedMetadata={event => setPreviewDurationMs(Math.round(event.currentTarget.duration * 1000))} className="size-full object-contain" src={previewUrl} /> : <div className="absolute inset-0 grid place-items-center"><div className="text-center text-white"><div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white/10 text-[#d0ef91]"><Play size={22} fill="currentColor" /></div><p className="text-sm font-medium">Your preview will appear here</p><p className="mt-1 text-xs text-white/55">Add up to 12 short clips</p></div></div>}
               {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] backdrop-blur-sm"><div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely</p><p className="mt-1 text-[11px] text-[#68736f]">Saving to this browser session</p></div></div>}
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1b2421] px-5 py-4"><div className="flex items-center gap-3 text-xs text-white/65"><FileVideo2 size={15} className="text-[#b9e65c]" /><span className="max-w-[360px] truncate">{selectedClip?.originalName || "No clip selected"}</span></div>{project && <button onClick={() => void deleteCurrentProject()} className="flex items-center gap-1.5 text-[11px] font-medium text-white/55 transition hover:text-white"><Trash2 size={14} /> Delete project</button>}</div>
+            <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1b2421] px-5 py-4"><div className="flex items-center gap-3 text-xs text-white/65"><FileVideo2 size={15} className="text-[#b9e65c]" /><span className="max-w-[360px] truncate">{selectedClip?.originalName || "No clip selected"}</span></div>{project && <div className="flex items-center gap-4"><button onClick={() => void duplicateCurrentProject()} disabled={duplicateProject.isPending} className="flex items-center gap-1.5 text-[11px] font-medium text-[#c5f165] transition hover:text-white disabled:opacity-50">{duplicateProject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Copy size={14} />} Duplicate</button><button onClick={() => void deleteCurrentProject()} className="flex items-center gap-1.5 text-[11px] font-medium text-white/55 transition hover:text-white"><Trash2 size={14} /> Delete project</button></div>}</div>
           </section>
 
           <section className="rounded-[24px] border border-[#dfdfd9] bg-[#fbfaf8] p-5 shadow-[0_20px_60px_rgba(31,43,37,.05)]">
@@ -341,7 +473,7 @@ export default function Home() {
             <input ref={inputRef} className="hidden" type="file" accept="video/*" onChange={onFileChange} />
             {project && <div className="mt-4 rounded-xl border border-[#e4e6e1] bg-white p-2.5"><label className="text-[10px] font-semibold text-[#728078]">PROJECT NAME<div className="mt-1.5 flex gap-2"><input aria-label="Project name" value={projectTitleDraft} maxLength={120} onChange={event => setProjectTitleDraft(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void saveProjectTitle(); }} className="min-w-0 flex-1 rounded-lg border border-[#dce3d8] bg-[#fbfcfa] px-2.5 py-2 text-xs font-medium outline-none focus:border-[#91b85e]" /><button aria-label="Save project name" onClick={() => void saveProjectTitle()} disabled={renameProject.isPending || !projectTitleDraft.trim() || projectTitleDraft.trim() === project.title} className="grid size-8 place-items-center rounded-lg bg-[#eaf3dd] text-[#557b35] transition hover:bg-[#deebcc] disabled:opacity-40">{renameProject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <PencilLine size={13} />}</button></div></label></div>}
             <div className="mt-4 max-h-[220px] space-y-2 overflow-y-auto pr-1">{clips.length ? clips.map((clip, index) => <div key={clip.id} className={`flex items-center gap-2 rounded-xl border p-2 transition ${clip.id === selectedClipId ? "border-[#9fc66d] bg-[#f2f8e9]" : "border-[#e3e6e0] bg-white"}`}><button onClick={() => setSelectedClipId(clip.id)} className="min-w-0 flex-1 text-left"><p className="truncate text-[11px] font-semibold">{index + 1}. {clip.originalName}</p><p className="mt-0.5 text-[10px] text-[#7c8882]">{formatBytes(clip.sizeBytes)} · {clip.trimStartMs || clip.trimEndMs ? "trimmed" : "full clip"}</p></button><div className="flex items-center"><button aria-label="Move clip up" disabled={index === 0 || reorderClips.isPending} onClick={() => void moveClip(clip.id, -1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowUp size={13} /></button><button aria-label="Move clip down" disabled={index === clips.length - 1 || reorderClips.isPending} onClick={() => void moveClip(clip.id, 1)} className="rounded p-1 text-[#738079] hover:bg-white disabled:opacity-30"><ArrowDown size={13} /></button><button aria-label="Remove clip" disabled={clips.length === 1 || removeClip.isPending} onClick={() => void deleteSelectedClip(clip.id)} className="rounded p-1 text-[#a7605a] hover:bg-rose-50 disabled:opacity-30"><Trash2 size={13} /></button></div></div>) : <p className="rounded-xl border border-dashed border-[#d9ded7] px-4 py-5 text-center text-[11px] text-[#87918c]">เพิ่มคลิปแรกเพื่อเริ่มไทม์ไลน์</p>}</div>
-            {selectedClip && <div className="mt-4 rounded-2xl border border-[#dce6d3] bg-[#f4f8ed] p-3.5"><div className="mb-3 flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Clip timeline</p><p className="mt-0.5 truncate text-[11px] font-semibold text-[#2e4439]">{selectedClip.originalName}</p></div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-[#647b6c]">{(editableDurationMs / 1000).toFixed(1)}s</span></div><div className="space-y-3"><label className="block text-[10px] font-semibold text-[#61736a]">START <span className="float-right font-medium text-[#35593e]">{(trimStartMs / 1000).toFixed(1)}s</span><input aria-label="Clip trim start" type="range" min="0" max={Math.max(0, editableDurationMs - 500)} step="100" value={Math.min(trimStartMs, Math.max(0, editableDurationMs - 500))} onChange={event => setTrimStartMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label><label className="block text-[10px] font-semibold text-[#61736a]">END <span className="float-right font-medium text-[#35593e]">{((trimEndMs || editableDurationMs) / 1000).toFixed(1)}s</span><input aria-label="Clip trim end" type="range" min={Math.min(trimStartMs + 500, editableDurationMs)} max={editableDurationMs} step="100" value={Math.max(Math.min(trimEndMs || editableDurationMs, editableDurationMs), Math.min(trimStartMs + 500, editableDurationMs))} onChange={event => setTrimEndMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label></div><div className="mt-3 flex gap-2"><button onClick={() => void saveClipTrim()} disabled={setClipTrim.isPending} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-50">{setClipTrim.isPending ? <Loader2 className="size-3 animate-spin" /> : <Save size={13} />} Save trim</button><button onClick={() => { setTrimStartMs(0); setTrimEndMs(editableDurationMs); }} className="rounded-lg border border-[#cbdac1] bg-white px-3 py-2 text-[10px] font-semibold text-[#5c7364] transition hover:bg-[#fbfcf9]">Reset</button></div></div>}
+            {selectedClip && <div className="mt-4 rounded-2xl border border-[#dce6d3] bg-[#f4f8ed] p-3.5"><div className="mb-3 flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-[.13em] text-[#648447]">Clip timeline</p><p className="mt-0.5 truncate text-[11px] font-semibold text-[#2e4439]">{selectedClip.originalName}</p></div><span className="rounded-full bg-white px-2 py-1 text-[10px] font-semibold text-[#647b6c]">{(editableDurationMs / 1000).toFixed(1)}s</span></div><div className="mb-3 rounded-xl border border-[#dbe6d2] bg-white p-2.5"><div className="mb-2 flex items-center justify-between gap-3"><div><p className="text-[10px] font-bold text-[#456c3e]">AUDIO WAVEFORM</p><p className="mt-0.5 text-[9px] text-[#718178]">ความสูงมากคือเสียงเด่น ช่วยเล็งช่วงเงียบก่อนตัด</p></div><div className="flex rounded-lg bg-[#edf3e8] p-0.5 text-[9px] font-semibold"><button onClick={() => setWaveformTrimTarget("start")} className={`rounded-md px-2 py-1 transition ${waveformTrimTarget === "start" ? "bg-[#244337] text-white" : "text-[#63756b]"}`}>Set start</button><button onClick={() => setWaveformTrimTarget("end")} className={`rounded-md px-2 py-1 transition ${waveformTrimTarget === "end" ? "bg-[#244337] text-white" : "text-[#63756b]"}`}>Set end</button></div></div>{waveformStatus === "loading" ? <div className="grid h-16 place-items-center rounded-lg bg-[#f7faf4] text-[10px] font-medium text-[#6a7a70]"><span className="inline-flex items-center gap-2"><Loader2 className="size-3.5 animate-spin text-[#779f45]" /> Reading audio waveform</span></div> : waveformStatus === "ready" ? <button aria-label={`Waveform timeline: click to set ${waveformTrimTarget}`} onClick={setTrimFromWaveform} className="relative flex h-16 w-full items-center gap-px overflow-hidden rounded-lg bg-[#1d3129] px-1.5 focus:outline-none focus:ring-2 focus:ring-[#87ad52]">{waveformPeaks.map((peak, index) => <span key={index} className="relative z-10 min-w-0 flex-1 rounded-full bg-[#c5f165] transition-opacity" style={{ height: `${Math.max(10, peak * 92)}%` }} />)}<span aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 bg-[#13231e]/65" style={{ width: `${(trimStartMs / editableDurationMs) * 100}%` }} /><span aria-hidden="true" className="pointer-events-none absolute inset-y-0 right-0 bg-[#13231e]/65" style={{ width: `${Math.max(0, 100 - ((trimEndMs || editableDurationMs) / editableDurationMs) * 100)}%` }} /><span aria-hidden="true" className="pointer-events-none absolute inset-y-0 w-0.5 bg-white" style={{ left: `${(trimStartMs / editableDurationMs) * 100}%` }} /><span aria-hidden="true" className="pointer-events-none absolute inset-y-0 w-0.5 bg-white" style={{ left: `${((trimEndMs || editableDurationMs) / editableDurationMs) * 100}%` }} /></button> : <div className="grid h-16 place-items-center rounded-lg bg-[#f7faf4] px-3 text-center text-[10px] leading-4 text-[#708078]">ไม่พบเสียงที่อ่านได้ในคลิปนี้ — ยังตั้งช่วงตัดด้วย slider ด้านล่างได้</div>}</div><div className="space-y-3"><label className="block text-[10px] font-semibold text-[#61736a]">START <span className="float-right font-medium text-[#35593e]">{(trimStartMs / 1000).toFixed(1)}s</span><input aria-label="Clip trim start" type="range" min="0" max={Math.max(0, editableDurationMs - 500)} step="100" value={Math.min(trimStartMs, Math.max(0, editableDurationMs - 500))} onChange={event => setTrimStartMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label><label className="block text-[10px] font-semibold text-[#61736a]">END <span className="float-right font-medium text-[#35593e]">{((trimEndMs || editableDurationMs) / 1000).toFixed(1)}s</span><input aria-label="Clip trim end" type="range" min={Math.min(trimStartMs + 500, editableDurationMs)} max={editableDurationMs} step="100" value={Math.max(Math.min(trimEndMs || editableDurationMs, editableDurationMs), Math.min(trimStartMs + 500, editableDurationMs))} onChange={event => setTrimEndMs(Number(event.target.value))} className="mt-2 w-full accent-[#7da840]" /></label></div><div className="mt-3 flex gap-2"><button onClick={() => void saveClipTrim()} disabled={setClipTrim.isPending} className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-50">{setClipTrim.isPending ? <Loader2 className="size-3 animate-spin" /> : <Save size={13} />} Save trim</button><button onClick={() => { setTrimStartMs(0); setTrimEndMs(editableDurationMs); }} className="rounded-lg border border-[#cbdac1] bg-white px-3 py-2 text-[10px] font-semibold text-[#5c7364] transition hover:bg-[#fbfcf9]">Reset</button></div></div>}
             {project && <div className="mt-4 flex items-center justify-between rounded-xl border border-[#e4e6e1] bg-white px-3 py-2"><span className="text-[10px] font-semibold text-[#728078]">File access</span><select value={retentionValue} disabled={setRetention.isPending} onChange={event => { const retention = event.target.value as "seven_days" | "thirty_days" | "keep"; void setRetention.mutateAsync({ projectId: project.id, retention }).then(async () => { await utils.video.listProjects.invalidate(); toast.success(retention === "keep" ? "เก็บไฟล์ไว้จนกว่าจะลบเอง" : "ตั้งอายุการเข้าถึงไฟล์แล้ว"); }).catch(error => toast.error(error instanceof Error ? error.message : "ตั้งอายุไฟล์ไม่สำเร็จ")); }} className="bg-transparent text-[10px] font-semibold text-[#557248] outline-none"><option value="seven_days">Expire in 7 days</option><option value="thirty_days">Expire in 30 days</option><option value="keep">Keep until I delete</option></select></div>}
           </section>
         </div>
@@ -353,7 +485,7 @@ export default function Home() {
             <button disabled={createJob.isPending || !command.trim() || !project} onClick={() => void submitCommand()} className="absolute bottom-3 right-3 inline-flex items-center gap-2 rounded-xl bg-[#172e29] px-4 py-2 text-xs font-semibold text-white transition hover:bg-[#274b40] disabled:cursor-not-allowed disabled:opacity-45 active:scale-[.97]">{createJob.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Scissors className="size-3.5" />} Create edit <ChevronRight size={14} /></button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">{prompts.map(prompt => <button key={prompt} onClick={() => setCommand(prompt)} className="rounded-full border border-[#dfe4db] bg-white px-3 py-1.5 text-[11px] font-medium text-[#5f6e68] transition hover:border-[#a8c67a] hover:bg-[#f3f8e9]">{prompt}</button>)}</div>
-          {requestsSubtitles && <div className="mt-5 rounded-2xl border border-[#dfe7d7] bg-[#f5f9ef] p-4"><div className="mb-3 flex items-center gap-2 text-[#537644]"><Captions size={15} /><p className="text-xs font-semibold">Subtitle style for this edit</p></div><div className="grid gap-2 sm:grid-cols-3">{(Object.entries(SUBTITLE_PRESETS) as [Exclude<SubtitlePresetId, "custom">, (typeof SUBTITLE_PRESETS)[Exclude<SubtitlePresetId, "custom">]][]).map(([id, preset]) => <button key={id} onClick={() => chooseSubtitlePreset(id)} className={`rounded-xl border p-3 text-left transition ${subtitlePreset === id ? "border-[#83ab55] bg-white shadow-sm" : "border-[#dce6d3] bg-white/55 hover:bg-white"}`}><p className="text-[11px] font-bold text-[#385139]">{preset.label}</p><p className="mt-1 text-[10px] leading-4 text-[#718078]">{preset.description}</p></button>)}</div><button onClick={() => chooseSubtitlePreset("custom")} className={`mt-3 text-[10px] font-semibold ${subtitlePreset === "custom" ? "text-[#456d36]" : "text-[#738179] hover:text-[#456d36]"}`}>Customize manually</button><div className="mt-3 grid gap-3 sm:grid-cols-3"><label className="text-[10px] font-semibold text-[#6c7971]">FONT<select value={subtitleStyle.font} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, font: event.target.value as "Noto Sans Thai" | "Arial" | "Inter" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option>Noto Sans Thai</option><option>Arial</option><option>Inter</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">SIZE<select value={subtitleStyle.size} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, size: event.target.value as "small" | "medium" | "large" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">POSITION<select value={subtitleStyle.position} onChange={event => { chooseSubtitlePreset("custom"); setSubtitleStyle(current => ({ ...current, position: event.target.value as "bottom" | "middle" | "top" })); }} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label></div></div>}
+            {requestsSubtitles && <div className="mt-5 rounded-2xl border border-[#dfe7d7] bg-[#f5f9ef] p-4"><div className="mb-3 flex items-center gap-2 text-[#537644]"><Captions size={15} /><p className="text-xs font-semibold">Subtitle style for this edit</p></div><div className="grid gap-2 sm:grid-cols-3">{(Object.entries(SUBTITLE_PRESETS) as [Exclude<SubtitlePresetId, "custom">, (typeof SUBTITLE_PRESETS)[Exclude<SubtitlePresetId, "custom">]][]).map(([id, preset]) => <button key={id} onClick={() => chooseSubtitlePreset(id)} className={`rounded-xl border p-3 text-left transition ${subtitlePreset === id ? "border-[#83ab55] bg-white shadow-sm" : "border-[#dce6d3] bg-white/55 hover:bg-white"}`}><p className="text-[11px] font-bold text-[#385139]">{preset.label}</p><p className="mt-1 text-[10px] leading-4 text-[#718078]">{preset.description}</p></button>)}</div><div className="mt-4 rounded-xl border border-[#dce6d3] bg-white/75 p-3"><div className="mb-2 flex items-center justify-between"><p className="text-[10px] font-bold uppercase tracking-[.12em] text-[#58774b]">Your saved presets</p><span className="text-[10px] text-[#7b887f]">{customPresets.length}/20</span></div>{customPresetsQuery.isLoading ? <div className="grid h-10 place-items-center"><Loader2 className="size-3.5 animate-spin text-[#779f45]" /></div> : customPresets.length ? <div className="flex flex-wrap gap-2">{customPresets.map(preset => <div key={preset.id} className={`flex items-center gap-1 rounded-lg border px-1 py-1 transition ${selectedCustomPresetId === preset.id && subtitlePreset === "custom" ? "border-[#81aa52] bg-[#eff7e6]" : "border-[#d9e2d2] bg-white"}`}><button onClick={() => chooseSavedSubtitlePreset(preset)} className="px-1.5 py-1 text-[10px] font-semibold text-[#405c43]">{preset.name}</button><button aria-label={`Delete preset ${preset.name}`} onClick={() => void removeCustomSubtitlePreset(preset)} disabled={deleteCustomSubtitlePreset.isPending} className="rounded p-1 text-[#9e625c] transition hover:bg-rose-50 disabled:opacity-40"><Trash2 size={12} /></button></div>)}</div> : <p className="text-[10px] leading-4 text-[#79877e]">บันทึกรูปแบบที่ใช้บ่อยไว้ใช้กับคลิปถัดไปในเบราว์เซอร์นี้</p>}</div><button onClick={() => chooseSubtitlePreset("custom")} className={`mt-3 text-[10px] font-semibold ${subtitlePreset === "custom" ? "text-[#456d36]" : "text-[#738179] hover:text-[#456d36]"}`}>Customize manually</button><div className="mt-3 grid gap-3 sm:grid-cols-3"><label className="text-[10px] font-semibold text-[#6c7971]">FONT<select value={subtitleStyle.font} onChange={event => updateCustomStyle({ font: event.target.value as "Noto Sans Thai" | "Arial" | "Inter" })} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option>Noto Sans Thai</option><option>Arial</option><option>Inter</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">SIZE<select value={subtitleStyle.size} onChange={event => updateCustomStyle({ size: event.target.value as "small" | "medium" | "large" })} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></label><label className="text-[10px] font-semibold text-[#6c7971]">POSITION<select value={subtitleStyle.position} onChange={event => updateCustomStyle({ position: event.target.value as "bottom" | "middle" | "top" })} className="mt-1.5 block w-full rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none"><option value="bottom">Bottom</option><option value="middle">Middle</option><option value="top">Top</option></select></label></div><div className="mt-3 flex gap-2"><input aria-label="Custom subtitle preset name" value={newPresetName} maxLength={80} onChange={event => setNewPresetName(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void saveCustomSubtitlePreset(); }} placeholder="Name this subtitle style" className="min-w-0 flex-1 rounded-lg border border-[#d7e0d1] bg-white px-2.5 py-2 text-xs font-medium text-[#26382f] outline-none placeholder:text-[#a0aaa4] focus:border-[#8eb961]" /><button onClick={() => void saveCustomSubtitlePreset()} disabled={createCustomSubtitlePreset.isPending || updateCustomSubtitlePreset.isPending || !newPresetName.trim()} className="inline-flex items-center gap-1.5 rounded-lg bg-[#244337] px-3 py-2 text-[10px] font-semibold text-white transition hover:bg-[#315849] disabled:opacity-40">{createCustomSubtitlePreset.isPending || updateCustomSubtitlePreset.isPending ? <Loader2 className="size-3 animate-spin" /> : <Save size={12} />}{selectedCustomPresetId ? "Update preset" : "Save preset"}</button></div></div>}
         </section>
 
         <section className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(290px,.8fr)]">

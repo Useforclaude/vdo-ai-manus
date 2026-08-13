@@ -3,9 +3,14 @@ import type { TrpcContext } from "./_core/context";
 
 const mocks = vi.hoisted(() => ({
   createEditJob: vi.fn(),
+  createSubtitlePreset: vi.fn(),
+  deleteSubtitlePreset: vi.fn(),
+  duplicateVideoProject: vi.fn(),
   getVideoProjectForUser: vi.fn(),
+  getSubtitlePresetForUser: vi.fn(),
   interpretVideoCommand: vi.fn(),
   listProjectsForUser: vi.fn(),
+  listSubtitlePresetsForUser: vi.fn(),
   listVideoClips: vi.fn(),
   listEditJobsForUser: vi.fn(),
   renameVideoProject: vi.fn(),
@@ -14,15 +19,21 @@ const mocks = vi.hoisted(() => ({
   softDeleteEditJob: vi.fn(),
   softDeleteProject: vi.fn(),
   sweepExpiredProjects: vi.fn(),
+  updateSubtitlePreset: vi.fn(),
   updateVideoClipTrim: vi.fn(),
   resolveVideoActor: vi.fn(),
 }));
 
 vi.mock("./db", () => ({
   createEditJob: mocks.createEditJob,
+  createSubtitlePreset: mocks.createSubtitlePreset,
+  deleteSubtitlePreset: mocks.deleteSubtitlePreset,
+  duplicateVideoProject: mocks.duplicateVideoProject,
   getVideoProjectForUser: mocks.getVideoProjectForUser,
+  getSubtitlePresetForUser: mocks.getSubtitlePresetForUser,
   listEditJobsForUser: mocks.listEditJobsForUser,
   listProjectsForUser: mocks.listProjectsForUser,
+  listSubtitlePresetsForUser: mocks.listSubtitlePresetsForUser,
   listVideoClips: mocks.listVideoClips,
   renameVideoProject: mocks.renameVideoProject,
   reorderVideoClips: mocks.reorderVideoClips,
@@ -30,6 +41,7 @@ vi.mock("./db", () => ({
   softDeleteEditJob: mocks.softDeleteEditJob,
   softDeleteProject: mocks.softDeleteProject,
   sweepExpiredProjects: mocks.sweepExpiredProjects,
+  updateSubtitlePreset: mocks.updateSubtitlePreset,
   updateVideoClipTrim: mocks.updateVideoClipTrim,
 }));
 
@@ -183,5 +195,68 @@ describe("video router", () => {
 
     expect(mocks.setProjectRetention).toHaveBeenCalledWith(33, 7, new Date("2026-08-20T00:00:00.000Z"));
     vi.useRealTimers();
+  });
+
+  it("duplicates only the current guest's project and preserves a clear copy title", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getVideoProjectForUser.mockResolvedValue({ id: 55, userId: 101, title: "Interview cut" });
+    mocks.duplicateVideoProject.mockResolvedValue({ id: 56, userId: 101, title: "Copy of Interview cut" });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.duplicateProject({ projectId: 55 })).resolves.toMatchObject({ id: 56, title: "Copy of Interview cut" });
+
+    expect(mocks.getVideoProjectForUser).toHaveBeenCalledWith(55, 101);
+    expect(mocks.duplicateVideoProject).toHaveBeenCalledWith(55, 101, "Copy of Interview cut");
+  });
+
+  it("does not duplicate a project outside the current guest session", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.getVideoProjectForUser.mockResolvedValue(undefined);
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.duplicateProject({ projectId: 55 })).rejects.toThrow("Video project was not found");
+    expect(mocks.duplicateVideoProject).not.toHaveBeenCalled();
+  });
+
+  it("lists and creates custom subtitle presets only for the current guest", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.listSubtitlePresetsForUser.mockResolvedValue([{ id: 9, userId: 101, name: "Green Thai", font: "Noto Sans Thai", size: "medium", position: "bottom" }]);
+    mocks.createSubtitlePreset.mockResolvedValue({ id: 10, userId: 101, name: "Top Inter", font: "Inter", size: "large", position: "top" });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.listCustomSubtitlePresets()).resolves.toHaveLength(1);
+    await expect(caller.video.createCustomSubtitlePreset({ name: "Top Inter", font: "Inter", size: "large", position: "top" })).resolves.toMatchObject({ id: 10, userId: 101 });
+
+    expect(mocks.listSubtitlePresetsForUser).toHaveBeenCalledWith(101);
+    expect(mocks.createSubtitlePreset).toHaveBeenCalledWith({ userId: 101, name: "Top Inter", font: "Inter", size: "large", position: "top" });
+  });
+
+  it("surfaces the 20-preset limit without accepting an extra saved style", async () => {
+    mocks.createSubtitlePreset.mockRejectedValue(new Error("You can save up to 20 custom subtitle presets"));
+    const caller = appRouter.createCaller(createContext());
+
+    await expect(caller.video.createCustomSubtitlePreset({ name: "One too many", font: "Arial", size: "small", position: "bottom" })).rejects.toThrow("up to 20 custom subtitle presets");
+    expect(mocks.createSubtitlePreset).toHaveBeenCalledWith(expect.objectContaining({ userId: 7, name: "One too many" }));
+  });
+
+  it("updates a custom subtitle preset only through its current guest owner", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.updateSubtitlePreset.mockResolvedValue({ id: 9, userId: 101, name: "Clear Thai", font: "Noto Sans Thai", size: "large", position: "top" });
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.updateCustomSubtitlePreset({ presetId: 9, name: "Clear Thai", font: "Noto Sans Thai", size: "large", position: "top" })).resolves.toMatchObject({ id: 9, userId: 101 });
+    expect(mocks.updateSubtitlePreset).toHaveBeenCalledWith(9, 101, { name: "Clear Thai", font: "Noto Sans Thai", size: "large", position: "top" });
+  });
+
+  it("deletes a custom subtitle preset only through its guest owner", async () => {
+    mocks.resolveVideoActor.mockResolvedValue({ userId: 101, isGuest: true });
+    mocks.deleteSubtitlePreset.mockResolvedValue(true);
+    const caller = appRouter.createCaller(createContext(null));
+
+    await expect(caller.video.deleteCustomSubtitlePreset({ presetId: 9 })).resolves.toEqual({ success: true });
+    expect(mocks.deleteSubtitlePreset).toHaveBeenCalledWith(9, 101);
+
+    mocks.deleteSubtitlePreset.mockResolvedValue(false);
+    await expect(caller.video.deleteCustomSubtitlePreset({ presetId: 99 })).rejects.toThrow("Custom subtitle preset was not found");
   });
 });

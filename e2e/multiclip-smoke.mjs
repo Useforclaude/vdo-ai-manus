@@ -20,12 +20,20 @@ try {
   await page.locator("video").waitFor({ state: "visible", timeout: 10_000 });
   const previewUrl = await page.locator("video").getAttribute("src");
   if (!previewUrl?.includes("clip-two")) throw new Error("Selected-clip preview did not switch to the second clip");
+  await page.getByText("AUDIO WAVEFORM", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
 
   await page.getByRole("button", { name: "Move clip up" }).nth(1).click();
   await page.getByText(/1\. clip-two\.mp4/).waitFor({ state: "visible", timeout: 10_000 });
 
   const trimStart = page.getByLabel("Clip trim start");
   const trimEnd = page.getByLabel("Clip trim end");
+  const waveform = page.getByLabel(/Waveform timeline/);
+  await waveform.waitFor({ state: "visible", timeout: 10_000 });
+  await waveform.click({ position: { x: 110, y: 30 } });
+  if (Number(await trimStart.inputValue()) <= 0) throw new Error("Waveform click did not set a visible trim start");
+  await page.getByRole("button", { name: "Set end" }).click();
+  await waveform.click({ position: { x: 290, y: 30 } });
+  if (Number(await trimEnd.inputValue()) <= Number(await trimStart.inputValue())) throw new Error("Waveform click did not set a trim end after the start");
   await trimStart.evaluate((input) => {
     input.value = "100";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -52,10 +60,24 @@ try {
   await library.getByRole("button", { name: /E2E Timeline Studio/ }).click();
   await library.waitFor({ state: "hidden", timeout: 10_000 });
 
+  const projectDuplicated = page.waitForResponse(response => response.url().includes("video.duplicateProject") && response.ok(), { timeout: 10_000 });
+  await page.getByRole("button", { name: "Duplicate" }).click();
+  await projectDuplicated;
+  await page.getByRole("button", { name: "Clip library" }).click();
+  await library.getByLabel("Search projects").fill("Copy of E2E Timeline Studio");
+  await library.getByText("Copy of E2E Timeline Studio", { exact: true }).waitFor({ state: "visible", timeout: 10_000 });
+  await library.getByRole("button", { name: /Copy of E2E Timeline Studio/ }).click();
+  await library.waitFor({ state: "hidden", timeout: 10_000 });
+
   const command = page.locator("textarea");
   await command.fill("Create subtitles");
   await page.getByText("Subtitle style for this edit").waitFor({ state: "visible", timeout: 10_000 });
   await page.getByRole("button", { name: /Thai Story/ }).click();
+  await page.getByLabel("Custom subtitle preset name").fill("E2E Thai Story");
+  const presetCreated = page.waitForResponse(response => response.url().includes("video.createCustomSubtitlePreset") && response.ok(), { timeout: 10_000 });
+  await page.getByRole("button", { name: "Save preset" }).click();
+  await presetCreated;
+  await page.getByRole("button", { name: "E2E Thai Story", exact: true }).click();
 
   await command.fill("Crop to 16:9");
   await page.getByRole("button", { name: /Create edit/ }).click();
@@ -70,7 +92,7 @@ try {
   console.log(JSON.stringify({
     status: "passed",
     previewUrl,
-    checks: ["two uploads", "selected preview", "clip reorder", "saved clip trim", "project rename and library open", "Thai subtitle preset", "completed edit", "project deletion"],
+    checks: ["two uploads", "selected preview", "audio waveform panel and trim selection", "clip reorder", "saved clip trim", "project rename and library open", "project duplication", "Thai subtitle preset", "saved and selected custom subtitle preset", "completed edit", "project deletion"],
   }));
 } finally {
   await browser.close();

@@ -3,9 +3,11 @@ import { drizzle } from "drizzle-orm/mysql2";
 import {
   editJobs,
   InsertEditJob,
+  InsertSubtitlePreset,
   InsertUser,
   InsertVideoClip,
   InsertVideoProject,
+  subtitlePresets,
   users,
   videoClips,
   videoProjects,
@@ -111,6 +113,45 @@ export async function renameVideoProject(projectId: number, userId: number, titl
   return getVideoProjectForUser(projectId, userId);
 }
 
+export async function duplicateVideoProject(projectId: number, userId: number, title: string) {
+  const sourceProject = await getVideoProjectForUser(projectId, userId);
+  if (!sourceProject) return undefined;
+  const sourceClips = await listVideoClips(projectId, userId);
+  if (!sourceClips.length) return undefined;
+  const db = requireDb(await getDb());
+  let duplicateId: number | undefined;
+
+  await db.transaction(async tx => {
+    const result = await tx.insert(videoProjects).values({
+      userId,
+      title,
+      sourceFileName: sourceProject.sourceFileName,
+      sourceStorageKey: sourceProject.sourceStorageKey,
+      sourceUrl: sourceProject.sourceUrl,
+      sourceMimeType: sourceProject.sourceMimeType,
+      sourceBytes: sourceProject.sourceBytes,
+      durationSeconds: sourceProject.durationSeconds,
+      expiresAt: sourceProject.expiresAt,
+    });
+    duplicateId = Number(result[0].insertId);
+    await tx.insert(videoClips).values(sourceClips.map(clip => ({
+      projectId: duplicateId!,
+      userId,
+      sortOrder: clip.sortOrder,
+      originalName: clip.originalName,
+      mimeType: clip.mimeType,
+      sizeBytes: clip.sizeBytes,
+      storageKey: clip.storageKey,
+      storageUrl: clip.storageUrl,
+      trimStartMs: clip.trimStartMs,
+      trimEndMs: clip.trimEndMs,
+    })));
+  });
+
+  if (!duplicateId) throw new Error("Unable to duplicate the video project");
+  return getVideoProjectForUser(duplicateId, userId);
+}
+
 export async function createVideoClip(values: InsertVideoClip) {
   const db = requireDb(await getDb());
   const result = await db.insert(videoClips).values(values);
@@ -176,6 +217,41 @@ export async function updateVideoClipTrim(projectId: number, clipId: number, use
     eq(videoClips.userId, userId),
   )).limit(1);
   return rows[0];
+}
+
+export async function listSubtitlePresetsForUser(userId: number) {
+  const db = requireDb(await getDb());
+  return db.select().from(subtitlePresets).where(eq(subtitlePresets.userId, userId)).orderBy(desc(subtitlePresets.updatedAt), desc(subtitlePresets.id));
+}
+
+export async function getSubtitlePresetForUser(presetId: number, userId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(subtitlePresets).where(and(eq(subtitlePresets.id, presetId), eq(subtitlePresets.userId, userId))).limit(1);
+  return rows[0];
+}
+
+export async function createSubtitlePreset(values: InsertSubtitlePreset) {
+  const existing = await listSubtitlePresetsForUser(values.userId);
+  if (existing.length >= 20) throw new Error("You can save up to 20 custom subtitle presets");
+  const db = requireDb(await getDb());
+  const result = await db.insert(subtitlePresets).values(values);
+  return getSubtitlePresetForUser(Number(result[0].insertId), values.userId);
+}
+
+export async function updateSubtitlePreset(presetId: number, userId: number, values: Pick<InsertSubtitlePreset, "name" | "font" | "size" | "position">) {
+  const existing = await getSubtitlePresetForUser(presetId, userId);
+  if (!existing) return undefined;
+  const db = requireDb(await getDb());
+  await db.update(subtitlePresets).set(values).where(and(eq(subtitlePresets.id, presetId), eq(subtitlePresets.userId, userId)));
+  return getSubtitlePresetForUser(presetId, userId);
+}
+
+export async function deleteSubtitlePreset(presetId: number, userId: number) {
+  const existing = await getSubtitlePresetForUser(presetId, userId);
+  if (!existing) return false;
+  const db = requireDb(await getDb());
+  await db.delete(subtitlePresets).where(and(eq(subtitlePresets.id, presetId), eq(subtitlePresets.userId, userId)));
+  return true;
 }
 
 export async function softDeleteProject(projectId: number, userId: number) {
