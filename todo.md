@@ -122,4 +122,4 @@
 - [x] เพิ่มการล้าง upload session ที่หมดอายุหรือค้าง พร้อมลบชิ้นส่วน staging เพื่อประหยัดพื้นที่จัดเก็บ
 - [x] เพิ่ม regression tests และ browser smoke สำหรับ progress การยกเลิก และการล้าง upload session
 - [x] ล้าง session ที่หมดอายุเกิน 24 ชั่วโมงก่อนเริ่มหรือจบการอัปโหลดครั้งใหม่
-- [ ] ตั้งงานล้าง upload session และ staging parts ที่หมดอายุทุกคืนบน production
+- [x] ตั้งงานล้าง upload session และ staging parts ที่หมดอายุทุกคืนบน production (Heartbeat task: KRvXgKsAHo2C9i2TwUSTkz, 03:00 ICT / 20:00 UTC)
