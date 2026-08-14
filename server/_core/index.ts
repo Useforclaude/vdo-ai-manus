@@ -10,6 +10,7 @@ import { registerVideoRoutes } from "../videoRoutes";
 import { registerVideoChunkRoutes } from "../videoChunkRoutes";
 import { registerMcpRoutes } from "../mcpRoutes";
 import { registerMediaRoutes } from "../mediaRoutes";
+import { registerUploadCleanupRoutes } from "../uploadCleanupRoutes";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -40,6 +41,7 @@ async function startServer() {
   registerVideoChunkRoutes(app);
   registerVideoRoutes(app);
   registerMcpRoutes(app);
+  registerUploadCleanupRoutes(app);
   // tRPC API
   app.use(
     "/api/trpc",

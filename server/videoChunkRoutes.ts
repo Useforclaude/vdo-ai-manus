@@ -8,7 +8,7 @@ import { resolveVideoActor } from "./videoActor";
 
 export const VIDEO_UPLOAD_PART_BYTES = 4 * 1024 * 1024;
 const MAX_UPLOAD_PARTS = Math.ceil(MAX_SOURCE_BYTES / VIDEO_UPLOAD_PART_BYTES);
-const UPLOAD_SESSION_TTL_MS = 60 * 60 * 1000;
+const UPLOAD_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_CLIPS_PER_PROJECT = 12;
 
 function safeFileName(name: string) {
@@ -53,11 +53,18 @@ function validUploadId(value: string) {
   return /^upload_[a-f0-9]{32}$/.test(value);
 }
 
+async function purgeExpiredUploadStaging() {
+  const storageKeys = await db.purgeExpiredUploadSessions();
+  await Promise.all(storageKeys.map(storageKey => storageDelete(storageKey).catch(error => console.warn("[Video] Expired staging cleanup failed", error))));
+  return storageKeys.length;
+}
+
 export function registerVideoChunkRoutes(app: Express) {
   app.post("/api/video-uploads", async (req, res) => {
     try {
       const actor = await resolveVideoActor(req, res);
       await db.sweepExpiredProjects(actor.userId);
+      await purgeExpiredUploadStaging().catch(error => console.warn("[Video] Expired upload cleanup failed", error));
       const body = req.body as Record<string, unknown>;
       const totalBytes = Number(body?.totalBytes);
       const totalParts = Number(body?.totalParts);
@@ -112,6 +119,19 @@ export function registerVideoChunkRoutes(app: Express) {
     } catch (error) {
       console.error("[Video] Upload completion failed", error);
       return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to complete upload" });
+    }
+  });
+
+  app.delete("/api/video-uploads/:sessionId", async (req, res) => {
+    try {
+      const actor = await resolveVideoActor(req, res);
+      if (!validUploadId(req.params.sessionId)) return res.status(400).json({ error: "Invalid upload session" });
+      const stagingParts = await db.cancelVideoUploadSession(req.params.sessionId, actor.userId);
+      await Promise.all(stagingParts.map(part => storageDelete(part.storageKey).catch(error => console.warn("[Video] Cancel cleanup failed", error))));
+      return res.status(200).json({ cancelled: true, removedParts: stagingParts.length });
+    } catch (error) {
+      console.error("[Video] Upload cancellation failed", error);
+      return res.status(500).json({ error: error instanceof Error ? error.message : "Unable to cancel upload" });
     }
   });
 }

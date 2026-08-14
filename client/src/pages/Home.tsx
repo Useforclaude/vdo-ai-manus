@@ -41,6 +41,7 @@ import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
 import { extractWaveformPeaks, type WaveformPeaks } from "@/lib/waveform";
 import { buildProjectPreset, parseProjectPreset } from "@/lib/projectPreset";
 import { uploadVideoInParts } from "@/lib/chunkedVideoUpload";
+import { Progress } from "@/components/ui/progress";
 
 type Project = {
   id: number;
@@ -161,6 +162,7 @@ export default function Home() {
   const [command, setCommand] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [isProjectLibraryOpen, setIsProjectLibraryOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [projectTitleDraft, setProjectTitleDraft] = useState("");
@@ -191,6 +193,7 @@ export default function Home() {
   const [issuedMcpToken, setIssuedMcpToken] = useState<{ token: string; access: McpToken } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const projectPresetInputRef = useRef<HTMLInputElement>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const utils = trpc.useUtils();
   const projectsQuery = trpc.video.listProjects.useQuery();
   const searchedProjectsQuery = trpc.video.listProjects.useQuery({ search: projectSearch.trim() || undefined }, { enabled: isProjectLibraryOpen });
@@ -521,6 +524,7 @@ export default function Home() {
   }
 
   async function uploadVideo(file: File) {
+    if (isUploading) return;
     if (!file.type.startsWith("video/")) {
       toast.error("โปรดเลือกไฟล์วิดีโอ");
       return;
@@ -529,6 +533,9 @@ export default function Home() {
       toast.error("ไฟล์ต้องมีขนาดไม่เกิน 180 MB");
       return;
     }
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+    setUploadProgress(0);
     setIsUploading(true);
     setTemporaryPreview(URL.createObjectURL(file));
     try {
@@ -537,6 +544,8 @@ export default function Home() {
         file,
         projectId: isAppending ? project?.id : undefined,
         headers: videoApiHeaders(),
+        signal: abortController.signal,
+        onProgress: setUploadProgress,
       });
       if (!data.clip) throw new Error("บริการอัปโหลดไม่คืนข้อมูลคลิป");
       if (data.project) setSelectedProjectId(data.project.id);
@@ -549,7 +558,15 @@ export default function Home() {
       toast.error(error instanceof Error ? error.message : "อัปโหลดวิดีโอไม่สำเร็จ");
     } finally {
       setIsUploading(false);
+      setUploadProgress(0);
+      uploadAbortRef.current = null;
     }
+  }
+
+  function cancelUpload() {
+    if (!uploadAbortRef.current || uploadAbortRef.current.signal.aborted) return;
+    uploadAbortRef.current.abort();
+    toast.info("กำลังยกเลิกการอัปโหลดและล้างไฟล์ชั่วคราว");
   }
 
   function onDrop(event: DragEvent<HTMLButtonElement>) {
@@ -798,14 +815,14 @@ export default function Home() {
             <div className="flex h-14 items-center justify-between border-b border-white/10 px-5 text-white"><div className="flex items-center gap-2"><span className="size-2 rounded-full bg-[#c4ef55]" /><span className="text-xs font-semibold">Timeline preview</span></div><span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-medium text-white/70">{clips.length} / 12 clips</span></div>
             <div className="relative aspect-video bg-[radial-gradient(circle_at_42%_30%,#405e50_0%,#25372f_35%,#141c19_78%)]">
               {previewUrl ? <video controls onLoadedMetadata={event => setPreviewDurationMs(Math.round(event.currentTarget.duration * 1000))} className="size-full object-contain" src={previewUrl} /> : <div className="absolute inset-0 grid place-items-center"><div className="text-center text-white"><div className="mx-auto mb-4 grid size-14 place-items-center rounded-2xl bg-white/10 text-[#d0ef91]"><Play size={22} fill="currentColor" /></div><p className="text-sm font-medium">Your preview will appear here</p><p className="mt-1 text-xs text-white/55">Add up to 12 short clips</p></div></div>}
-              {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] backdrop-blur-sm"><div className="rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely</p><p className="mt-1 text-[11px] text-[#68736f]">Saving to this browser session</p></div></div>}
+              {isUploading && <div className="absolute inset-0 grid place-items-center bg-[#14211dcc] px-5 backdrop-blur-sm"><div role="status" className="w-full max-w-sm rounded-2xl bg-white px-5 py-4 text-center shadow-xl"><Loader2 className="mx-auto mb-2 size-5 animate-spin text-[#5d8337]" /><p className="text-xs font-semibold text-[#17201e]">Uploading securely · {uploadProgress}%</p><p className="mt-1 text-[11px] text-[#68736f]">Sending file parts to this browser session</p><Progress aria-label="Upload progress" value={uploadProgress} className="mt-3 h-2 bg-[#e6ede2] [&>div]:bg-[#79a647]" /><button type="button" onClick={cancelUpload} className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-[#e6c6c1] bg-[#fff8f7] px-3 py-1.5 text-[10px] font-semibold text-[#9c554d] transition hover:bg-rose-50"><X size={12} /> Cancel upload</button></div></div>}
             </div>
             <div className="flex flex-wrap items-center justify-between gap-3 bg-[#1b2421] px-5 py-4"><div className="flex items-center gap-3 text-xs text-white/65"><FileVideo2 size={15} className="text-[#b9e65c]" /><span className="max-w-[360px] truncate">{selectedClip?.originalName || "No clip selected"}</span></div>{project && <div className="flex items-center gap-4"><button onClick={() => void duplicateCurrentProject()} disabled={duplicateProject.isPending} className="flex items-center gap-1.5 text-[11px] font-medium text-[#c5f165] transition hover:text-white disabled:opacity-50">{duplicateProject.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Copy size={14} />} Duplicate</button><button onClick={() => void deleteCurrentProject()} className="flex items-center gap-1.5 text-[11px] font-medium text-white/55 transition hover:text-white"><Trash2 size={14} /> Delete project</button></div>}</div>
           </section>
 
           <section className="rounded-[24px] border border-[#dfdfd9] bg-[#fbfaf8] p-5 shadow-[0_20px_60px_rgba(31,43,37,.05)]">
             <div className="mb-5 flex items-center justify-between"><div><p className="text-[11px] font-bold uppercase tracking-[.14em] text-[#779775]">01 / Source</p><h2 className="mt-1 font-display text-xl font-semibold tracking-[-.04em]">Build your timeline</h2></div><UploadCloud className="size-5 text-[#6f9a4d]" /></div>
-            <button onClick={() => inputRef.current?.click()} onDragOver={event => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`group grid min-h-[132px] w-full place-items-center rounded-[18px] border border-dashed px-6 text-center transition ${isDragging ? "border-[#87b84b] bg-[#f2f9df]" : "border-[#cdd8cc] bg-[#f7f8f5] hover:border-[#8ab05d] hover:bg-[#f4f8ea]"}`}>
+            <button disabled={isUploading} onClick={() => inputRef.current?.click()} onDragOver={event => { event.preventDefault(); setIsDragging(true); }} onDragLeave={() => setIsDragging(false)} onDrop={onDrop} className={`group grid min-h-[132px] w-full place-items-center rounded-[18px] border border-dashed px-6 text-center transition disabled:cursor-not-allowed disabled:opacity-50 ${isDragging ? "border-[#87b84b] bg-[#f2f9df]" : "border-[#cdd8cc] bg-[#f7f8f5] hover:border-[#8ab05d] hover:bg-[#f4f8ea]"}`}>
               <div><div className="mx-auto mb-3 grid size-11 place-items-center rounded-xl bg-white text-[#6d9846] shadow-sm transition group-hover:-translate-y-0.5"><Plus size={19} /></div><p className="text-sm font-semibold">{project ? "Add another clip" : "Drop first video here"}</p><p className="mt-1 text-[11px] leading-5 text-[#74807b]">MP4, MOV, WebM and more<br />Maximum 180 MB for the assembled project</p></div>
             </button>
             <input ref={inputRef} className="hidden" type="file" accept="video/*" onChange={onFileChange} />

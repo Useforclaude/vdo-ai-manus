@@ -117,3 +117,9 @@
 - [x] แก้ไขข้อผิดพลาด Unexpected token '<' เมื่อหน้าเว็บได้รับ HTML แทน JSON ระหว่างการอัปโหลดหรือเรียก API
 - [x] เปลี่ยนเส้นทางอัปโหลดวิดีโอเพื่อหลีกเลี่ยง HTTP 403 จาก application gateway ที่ยังเกิดกับไฟล์จริงของผู้ใช้
 - [x] แก้ API upload part ที่ใช้ PUT แล้วถูกโดเมน production ส่งเข้า SPA fallback แทน API response
+- [x] แสดง progress ระดับแต่ละส่วนของไฟล์พร้อมสถานะกำลังส่งและจำนวนส่วนที่เสร็จในหน้าอัปโหลด
+- [x] เพิ่มปุ่มยกเลิกที่ abort คำขอในเบราว์เซอร์และลบ upload session/ชิ้นส่วน staging ของผู้ใช้
+- [x] เพิ่มการล้าง upload session ที่หมดอายุหรือค้าง พร้อมลบชิ้นส่วน staging เพื่อประหยัดพื้นที่จัดเก็บ
+- [x] เพิ่ม regression tests และ browser smoke สำหรับ progress การยกเลิก และการล้าง upload session
+- [x] ล้าง session ที่หมดอายุเกิน 24 ชั่วโมงก่อนเริ่มหรือจบการอัปโหลดครั้งใหม่
+- [ ] ตั้งงานล้าง upload session และ staging parts ที่หมดอายุทุกคืนบน production

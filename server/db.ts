@@ -300,12 +300,36 @@ export async function listVideoUploadParts(sessionId: string) {
 
 export async function removeVideoUploadSession(sessionId: string, userId: number) {
   const db = requireDb(await getDb());
+  const session = await db.select({ id: videoUploadSessions.id }).from(videoUploadSessions).where(and(
+    eq(videoUploadSessions.id, sessionId),
+    eq(videoUploadSessions.userId, userId),
+  )).limit(1);
+  if (!session[0]) return [];
   const parts = await listVideoUploadParts(sessionId);
   await db.transaction(async tx => {
     await tx.delete(videoUploadParts).where(eq(videoUploadParts.sessionId, sessionId));
     await tx.delete(videoUploadSessions).where(and(eq(videoUploadSessions.id, sessionId), eq(videoUploadSessions.userId, userId)));
   });
   return parts;
+}
+
+export async function cancelVideoUploadSession(sessionId: string, userId: number) {
+  return removeVideoUploadSession(sessionId, userId);
+}
+
+/** Removes expired DB records and returns their private staging object keys for storage cleanup. */
+export async function purgeExpiredUploadSessions(now = new Date()) {
+  const db = requireDb(await getDb());
+  const expiredSessions = await db.select({ id: videoUploadSessions.id }).from(videoUploadSessions)
+    .where(lt(videoUploadSessions.expiresAt, now));
+  const sessionIds = expiredSessions.map(session => session.id);
+  if (!sessionIds.length) return [];
+  const parts = await db.select().from(videoUploadParts).where(inArray(videoUploadParts.sessionId, sessionIds));
+  await db.transaction(async tx => {
+    await tx.delete(videoUploadParts).where(inArray(videoUploadParts.sessionId, sessionIds));
+    await tx.delete(videoUploadSessions).where(inArray(videoUploadSessions.id, sessionIds));
+  });
+  return parts.map(part => part.storageKey);
 }
 
 export async function listVideoClips(projectId: number, userId: number) {
