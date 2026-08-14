@@ -35,6 +35,8 @@
 
 :root { --radius: .75rem; --background: oklch(.973 .006 100); --foreground: oklch(.2 .015 160); --card: oklch(.992 .003 100); --card-foreground: oklch(.2 .015 160); --popover: oklch(.992 .003 100); --popover-foreground: oklch(.2 .015 160); --primary: oklch(.27 .04 160); --primary-foreground: oklch(.99 .01 100); --secondary: oklch(.94 .018 120); --secondary-foreground: oklch(.28 .03 160); --muted: oklch(.95 .006 145); --muted-foreground: oklch(.52 .018 160); --accent: oklch(.94 .018 120); --accent-foreground: oklch(.28 .03 160); --destructive: oklch(.59 .21 25); --destructive-foreground: oklch(.99 0 0); --border: oklch(.9 .008 145); --input: oklch(.9 .008 145); --ring: oklch(.56 .13 130); }
 
+.dark { --background: oklch(.16 .018 160); --foreground: oklch(.94 .008 145); --card: oklch(.205 .018 160); --card-foreground: oklch(.94 .008 145); --popover: oklch(.205 .018 160); --popover-foreground: oklch(.94 .008 145); --primary: oklch(.78 .16 125); --primary-foreground: oklch(.18 .02 160); --secondary: oklch(.26 .02 155); --secondary-foreground: oklch(.92 .01 145); --muted: oklch(.25 .018 160); --muted-foreground: oklch(.7 .014 150); --accent: oklch(.29 .03 145); --accent-foreground: oklch(.94 .008 145); --border: oklch(.31 .018 155); --input: oklch(.31 .018 155); --ring: oklch(.76 .14 125); }
+
 @layer base {
   * { @apply border-border outline-ring/50; }
   body { @apply bg-background font-sans text-foreground antialiased; }

@@ -96,3 +96,7 @@
 - [x] สร้างหน้า Settings สำหรับ AI provider และ S3-compatible storage โดยไม่แสดง secret ที่บันทึกแล้ว
 - [x] สร้าง System Dashboard พร้อมสถานะสด การแจ้งเตือน และรายละเอียดปัญหาของ MySQL, MinIO/S3 และ AI provider
 - [x] เพิ่ม Vitest และ browser workflow สำหรับการบันทึก config ที่ปลอดภัยและการแสดง health status
+- [x] ตรวจ design tokens และโครงสร้างธีมที่มีอยู่สำหรับ System Dashboard กับ Settings
+- [x] เพิ่มปุ่มสลับและจดจำ Dark Mode สำหรับ System Console
+- [x] ปรับสี พื้นผิว ตาราง ฟอร์ม และสถานะแจ้งเตือนของ Dashboard/Settings ให้มี contrast เหมาะสมใน Dark Mode
+- [x] เพิ่มและรันทดสอบ Dark Mode ทั้งระดับ unit และ browser visual smoke test
