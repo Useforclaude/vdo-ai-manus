@@ -1,6 +1,7 @@
 import { SystemAdminShell } from "@/components/SystemAdminShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { shouldEnableAdminQuery } from "@/lib/systemAdmin";
 import { trpc } from "@/lib/trpc";
 import { CheckCircle2, EyeOff, HardDrive, KeyRound, Loader2, Save, ServerCog, Sparkles } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
@@ -11,7 +12,8 @@ const emptyForm: FormState = { llmBaseUrl: "", llmApiKey: "", llmDefaultModel: "
 
 export default function SystemSettings() {
   const utils = trpc.useUtils();
-  const config = trpc.system.providerConfiguration.useQuery(undefined, { retry: false });
+  const access = trpc.system.access.useQuery();
+  const config = trpc.system.providerConfiguration.useQuery(undefined, { enabled: shouldEnableAdminQuery(access.data?.authorized), retry: false });
   const save = trpc.system.saveProviderConfiguration.useMutation({ onSuccess: () => { void utils.system.providerConfiguration.invalidate(); void utils.system.health.invalidate(); toast.success("บันทึกการตั้งค่าและโหลดใช้ทันทีแล้ว"); }, onError: error => toast.error(error.message) });
   const [form, setForm] = useState<FormState>(emptyForm);
   useEffect(() => { if (!config.data) return; const { ai, storage } = config.data; setForm(current => ({ ...current, llmBaseUrl: ai.llmBaseUrl ?? "", llmDefaultModel: ai.llmDefaultModel ?? "", transcriptionBaseUrl: ai.transcriptionBaseUrl ?? "", transcriptionModel: ai.transcriptionModel ?? "", driver: storage.driver, localPath: storage.localPath ?? "/data/media", bucket: storage.bucket ?? "", region: storage.region ?? "us-east-1", endpoint: storage.endpoint ?? "", forcePathStyle: storage.forcePathStyle })); }, [config.data]);

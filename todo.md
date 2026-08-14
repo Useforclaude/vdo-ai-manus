@@ -100,3 +100,7 @@
 - [x] เพิ่มปุ่มสลับและจดจำ Dark Mode สำหรับ System Console
 - [x] ปรับสี พื้นผิว ตาราง ฟอร์ม และสถานะแจ้งเตือนของ Dashboard/Settings ให้มี contrast เหมาะสมใน Dark Mode
 - [x] เพิ่มและรันทดสอบ Dark Mode ทั้งระดับ unit และ browser visual smoke test
+- [x] ตรวจ runtime logs, production endpoint และ health ของ Cineflow เพื่อระบุข้อผิดพลาดที่เกิดขึ้นจริง
+- [x] รัน browser smoke test สำหรับ Editor, MCP และ System Console เพื่อทำซ้ำปัญหาที่พบ
+- [x] แก้ไข bug ที่ยืนยันได้ พร้อมเพิ่ม regression test ที่เหมาะสม
+- [x] ยืนยัน TypeScript, Vitest และ browser workflow หลังแก้ไข bug แล้วบันทึกเวอร์ชันที่เสถียร
