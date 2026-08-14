@@ -73,6 +73,26 @@ export async function getOrCreateGuestUser(guestToken: string) {
   return rows[0];
 }
 
+export async function userOwnsStorageKey(userId: number, storageKey: string): Promise<boolean> {
+  const db = requireDb(await getDb());
+  const [project] = await db.select({ id: videoProjects.id }).from(videoProjects).where(and(
+    eq(videoProjects.userId, userId),
+    isNull(videoProjects.deletedAt),
+    eq(videoProjects.sourceStorageKey, storageKey),
+  )).limit(1);
+  if (project) return true;
+  const [clip] = await db.select({ id: videoClips.id }).from(videoClips).where(and(
+    eq(videoClips.userId, userId), eq(videoClips.storageKey, storageKey),
+  )).limit(1);
+  if (clip) return true;
+  const [job] = await db.select({ id: editJobs.id }).from(editJobs).where(and(
+    eq(editJobs.userId, userId),
+    isNull(editJobs.deletedAt),
+    or(eq(editJobs.processedStorageKey, storageKey), eq(editJobs.subtitleStorageKey, storageKey)),
+  )).limit(1);
+  return Boolean(job);
+}
+
 export async function createVideoProject(values: InsertVideoProject) {
   const db = requireDb(await getDb());
   const result = await db.insert(videoProjects).values(values);

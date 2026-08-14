@@ -1,9 +1,7 @@
 import { z } from "zod";
-import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
-import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import * as db from "./db";
+import { GUEST_COOKIE_NAME } from "./videoActor";
 import { createJobId, interpretVideoCommand, previewClipSilences } from "./videoEditing";
 import { resolveVideoActor } from "./videoActor";
 import { subtitleStyleForPreset } from "@shared/subtitles";
@@ -20,12 +18,10 @@ const customSubtitlePresetInput = subtitleStyleInput.extend({
 });
 
 export const appRouter = router({
-  system: systemRouter,
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
+      ctx.res.clearCookie(GUEST_COOKIE_NAME, { httpOnly: true, sameSite: "lax", path: "/", maxAge: -1 });
       return { success: true } as const;
     }),
   }),

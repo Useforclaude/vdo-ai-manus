@@ -1,43 +1,30 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("./_core/env", () => ({
-  ENV: {
-    forgeApiUrl: "https://forge.example",
-    forgeApiKey: "test-forge-key",
-  },
-}));
-
-import { storagePut } from "./storage";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 describe("storagePut", () => {
-  const originalFetch = globalThis.fetch;
+  const originalEnv = { ...process.env };
+  let tempDir = "";
 
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
+  afterEach(async () => {
+    process.env = { ...originalEnv };
     vi.restoreAllMocks();
+    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("creates a Blob from a video buffer and uploads it after presigning", async () => {
+  it("writes a video buffer through the local self-hosted storage adapter", async () => {
+    vi.resetModules();
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "cineflow-storage-unit-"));
+    process.env.CINEFLOW_STORAGE_DRIVER = "local";
+    process.env.CINEFLOW_LOCAL_STORAGE_PATH = tempDir;
+    const { storagePut, storageGetSignedUrl } = await import("./storage");
     const source = Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109]);
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ url: "https://s3.example/presigned-upload" }), { status: 200 }),
-      )
-      .mockImplementationOnce(async (_url: string | URL | Request, init?: RequestInit) => {
-        expect(init?.method).toBe("PUT");
-        expect(init?.headers).toEqual({ "Content-Type": "video/mp4" });
-        expect(init?.body).toBeInstanceOf(Blob);
-        expect(Buffer.from(await (init?.body as Blob).arrayBuffer())).toEqual(source);
-        return new Response(null, { status: 200 });
-      });
-    globalThis.fetch = fetchMock as typeof fetch;
-
     const output = await storagePut("users/1/video-editor/sources/clip.mp4", source, "video/mp4");
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(output.key).toMatch(/^users\/1\/video-editor\/sources\/clip_[a-f0-9]{8}\.mp4$/);
-    expect(output.url).toBe(`/manus-storage/${output.key}`);
+    expect(output.url).toBe(`/api/media?key=${encodeURIComponent(output.key)}`);
+    expect(await storageGetSignedUrl(output.key)).toMatch(/^file:/);
   });
 
   it("supports FormData with a video Blob for file upload requests", async () => {

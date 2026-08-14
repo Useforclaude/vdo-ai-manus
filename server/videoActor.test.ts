@@ -27,7 +27,7 @@ describe("resolveVideoActor", () => {
   it("creates an opaque guest cookie and guest owner when no user session exists", async () => {
     const res = response();
     await expect(resolveVideoActor(request(), res, null)).resolves.toEqual({ userId: 101, isGuest: true });
-    expect(res.cookie).toHaveBeenCalledWith(GUEST_COOKIE_NAME, expect.stringMatching(/^[A-Za-z0-9_-]{40,64}$/), expect.objectContaining({ httpOnly: true, sameSite: "lax", secure: true }));
+    expect(res.cookie).toHaveBeenCalledWith(GUEST_COOKIE_NAME, expect.stringMatching(/^[A-Za-z0-9_-]{40,64}$/), expect.objectContaining({ httpOnly: true, sameSite: "lax", secure: false }));
     expect(mocks.getOrCreateGuestUser).toHaveBeenCalledWith(expect.stringMatching(/^[A-Za-z0-9_-]{40,64}$/));
   });
 

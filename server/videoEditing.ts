@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 import { Readable } from "stream";
 import { finished } from "stream/promises";
+import { fileURLToPath } from "node:url";
 import { nanoid } from "nanoid";
 import type { EditPlan } from "../shared/editing";
 import * as db from "./db";
@@ -126,6 +127,12 @@ async function probeDuration(filePath: string) {
 }
 
 async function downloadToFile(url: string, destination: string) {
+  if (url.startsWith("file:")) {
+    await fs.copyFile(fileURLToPath(url), destination);
+    const stats = await fs.stat(destination);
+    if (stats.size > MAX_SOURCE_BYTES) throw new Error("Video exceeds the 180 MB processing limit");
+    return;
+  }
   const response = await fetch(url);
   if (!response.ok || !response.body) throw new Error("Unable to download the source video");
   const length = Number(response.headers.get("content-length") ?? "0");

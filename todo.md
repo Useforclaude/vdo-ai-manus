@@ -85,3 +85,9 @@
 - [x] เพิ่มหน้าแสดง audit log เฉพาะโปรเจกต์พร้อมรายละเอียดการทำงานของ agent
 - [x] เพิ่มปุ่มสร้างและคัดลอก config สำเร็จรูปสำหรับ Claude Desktop และ Cursor
 - [x] เพิ่ม Vitest และ browser E2E สำหรับ guided prompts, audit log และ config client
+- [x] ตรวจสอบและบันทึกจุดผูก Cineflow กับ Manus OAuth, Forge LLM/Whisper, Forge storage และ TiDB
+- [x] เพิ่ม runtime configuration และ adapter แบบ portable สำหรับ storage, LLM และ voice transcription
+- [x] เปลี่ยน guest identity และการป้องกัน API ให้ทำงานได้โดยไม่พึ่ง Manus OAuth หรือ preview gateway
+- [x] เพิ่ม Dockerfile, Docker Compose และตัวอย่าง environment สำหรับ self-hosted deployment
+- [x] จัดทำคู่มือย้ายข้อมูลและโฮสต์ Cineflow ด้วยฐานข้อมูล, object storage และ AI provider ที่ผู้ใช้ควบคุมเอง
+- [x] เพิ่มและรันทดสอบ regression สำหรับ portable runtime รวมถึงตรวจ TypeScript, Vitest และ browser workflow
