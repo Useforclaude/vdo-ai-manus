@@ -4,7 +4,7 @@ export type VideoUploadResponse = {
   error?: string;
 };
 
-export async function readVideoUploadResponse(response: Response): Promise<VideoUploadResponse> {
+export async function readJsonResponse<T = VideoUploadResponse>(response: Response): Promise<T> {
   const body = await response.text();
   let data: VideoUploadResponse;
 
@@ -23,5 +23,7 @@ export async function readVideoUploadResponse(response: Response): Promise<Video
     throw new Error(data.error ?? `อัปโหลดวิดีโอไม่สำเร็จ (HTTP ${response.status})`);
   }
 
-  return data;
+  return data as T;
 }
+
+export const readVideoUploadResponse = readJsonResponse<VideoUploadResponse>;

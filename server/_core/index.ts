@@ -7,6 +7,7 @@ import { appRouter } from "../routers";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 import { registerVideoRoutes } from "../videoRoutes";
+import { registerVideoChunkRoutes } from "../videoChunkRoutes";
 import { registerMcpRoutes } from "../mcpRoutes";
 import { registerMediaRoutes } from "../mediaRoutes";
 
@@ -36,6 +37,7 @@ async function startServer() {
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerMediaRoutes(app);
+  registerVideoChunkRoutes(app);
   registerVideoRoutes(app);
   registerMcpRoutes(app);
   // tRPC API

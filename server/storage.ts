@@ -1,4 +1,4 @@
-import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -66,6 +66,44 @@ export async function storagePut(
     await fs.writeFile(target, data);
   }
   return { key, url: publicMediaPath(key) };
+}
+
+/** Stores a private, deterministic staging object. Callers must use an unguessable prefix. */
+export async function storagePutExact(relKey: string, data: Buffer | Uint8Array | string, contentType = "application/octet-stream"): Promise<string> {
+  const key = normalizeKey(relKey);
+  const { storage } = await getRuntimeProviderConfig();
+  if (isS3(storage)) {
+    const { bucket } = requireS3Config(storage);
+    await createS3Client(storage).send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: data, ContentType: contentType }));
+  } else {
+    const target = localPathFor(key, storage);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, data);
+  }
+  return key;
+}
+
+export async function storageRead(relKey: string): Promise<Buffer> {
+  const key = normalizeKey(relKey);
+  const { storage } = await getRuntimeProviderConfig();
+  if (!isS3(storage)) return fs.readFile(localPathFor(key, storage));
+  const { bucket } = requireS3Config(storage);
+  const object = await createS3Client(storage).send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!object.Body) throw new Error("Stored upload part is unavailable");
+  const chunks: Buffer[] = [];
+  for await (const chunk of object.Body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks);
+}
+
+export async function storageDelete(relKey: string): Promise<void> {
+  const key = normalizeKey(relKey);
+  const { storage } = await getRuntimeProviderConfig();
+  if (isS3(storage)) {
+    const { bucket } = requireS3Config(storage);
+    await createS3Client(storage).send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    return;
+  }
+  await fs.rm(localPathFor(key, storage), { force: true });
 }
 
 export async function storageGet(relKey: string): Promise<{ key: string; url: string }> {

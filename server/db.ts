@@ -8,10 +8,14 @@ import {
   InsertUser,
   InsertVideoClip,
   InsertVideoProject,
+  InsertVideoUploadPart,
+  InsertVideoUploadSession,
   subtitlePresets,
   users,
   videoClips,
   videoProjects,
+  videoUploadParts,
+  videoUploadSessions,
   mcpAccessTokens,
   mcpAuditLogs,
   systemSettings,
@@ -256,6 +260,52 @@ export async function createVideoClip(values: InsertVideoClip) {
   const result = await db.insert(videoClips).values(values);
   const rows = await db.select().from(videoClips).where(eq(videoClips.id, Number(result[0].insertId))).limit(1);
   return rows[0];
+}
+
+export async function createVideoUploadSession(values: InsertVideoUploadSession) {
+  const db = requireDb(await getDb());
+  await db.insert(videoUploadSessions).values(values);
+  return getVideoUploadSessionForUser(values.id, values.userId);
+}
+
+export async function getVideoUploadSessionForUser(sessionId: string, userId: number) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(videoUploadSessions).where(and(
+    eq(videoUploadSessions.id, sessionId),
+    eq(videoUploadSessions.userId, userId),
+    gt(videoUploadSessions.expiresAt, new Date()),
+  )).limit(1);
+  return rows[0];
+}
+
+export async function saveVideoUploadPart(values: InsertVideoUploadPart) {
+  const db = requireDb(await getDb());
+  const existing = await db.select().from(videoUploadParts).where(and(
+    eq(videoUploadParts.sessionId, values.sessionId),
+    eq(videoUploadParts.partIndex, values.partIndex),
+  )).limit(1);
+  if (existing[0]) {
+    await db.update(videoUploadParts).set({ storageKey: values.storageKey, sizeBytes: values.sizeBytes }).where(eq(videoUploadParts.id, existing[0].id));
+    return { ...existing[0], storageKey: values.storageKey, sizeBytes: values.sizeBytes };
+  }
+  const result = await db.insert(videoUploadParts).values(values);
+  const rows = await db.select().from(videoUploadParts).where(eq(videoUploadParts.id, Number(result[0].insertId))).limit(1);
+  return rows[0];
+}
+
+export async function listVideoUploadParts(sessionId: string) {
+  const db = requireDb(await getDb());
+  return db.select().from(videoUploadParts).where(eq(videoUploadParts.sessionId, sessionId)).orderBy(asc(videoUploadParts.partIndex));
+}
+
+export async function removeVideoUploadSession(sessionId: string, userId: number) {
+  const db = requireDb(await getDb());
+  const parts = await listVideoUploadParts(sessionId);
+  await db.transaction(async tx => {
+    await tx.delete(videoUploadParts).where(eq(videoUploadParts.sessionId, sessionId));
+    await tx.delete(videoUploadSessions).where(and(eq(videoUploadSessions.id, sessionId), eq(videoUploadSessions.userId, userId)));
+  });
+  return parts;
 }
 
 export async function listVideoClips(projectId: number, userId: number) {

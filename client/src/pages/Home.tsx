@@ -40,7 +40,7 @@ import { Link } from "wouter";
 import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
 import { extractWaveformPeaks, type WaveformPeaks } from "@/lib/waveform";
 import { buildProjectPreset, parseProjectPreset } from "@/lib/projectPreset";
-import { readVideoUploadResponse } from "@/lib/uploadResponse";
+import { uploadVideoInParts } from "@/lib/chunkedVideoUpload";
 
 type Project = {
   id: number;
@@ -533,13 +533,11 @@ export default function Home() {
     setTemporaryPreview(URL.createObjectURL(file));
     try {
       const isAppending = Boolean(project);
-      const response = await fetch(isAppending ? `/api/video-projects/${project?.id}/clips` : "/api/video-upload", {
-        method: "POST",
-        // Keep the original video MIME in x-file-type for validation, while using a binary transport type accepted by common application gateways.
-        headers: videoApiHeaders({ "content-type": "application/octet-stream", "x-file-name": file.name, "x-file-type": file.type || "video/mp4" }),
-        body: file,
+      const data = await uploadVideoInParts<Project, Clip>({
+        file,
+        projectId: isAppending ? project?.id : undefined,
+        headers: videoApiHeaders(),
       });
-      const data = await readVideoUploadResponse(response) as { project?: Project; clip?: Clip };
       if (!data.clip) throw new Error("บริการอัปโหลดไม่คืนข้อมูลคลิป");
       if (data.project) setSelectedProjectId(data.project.id);
       setSelectedClipId(data.clip.id);

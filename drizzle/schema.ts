@@ -47,6 +47,32 @@ export const videoClips = mysqlTable("video_clips", {
   index("video_clips_user_project_idx").on(table.userId, table.projectId),
 ]);
 
+/** Short-lived metadata for resumable browser uploads. Raw upload parts remain in private storage. */
+export const videoUploadSessions = mysqlTable("video_upload_sessions", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  userId: int("user_id").notNull(),
+  projectId: int("project_id"),
+  fileName: varchar("file_name", { length: 512 }).notNull(),
+  mimeType: varchar("mime_type", { length: 255 }).notNull(),
+  totalBytes: int("total_bytes").notNull(),
+  totalParts: int("total_parts").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  index("upload_sessions_user_expires_idx").on(table.userId, table.expiresAt),
+]);
+
+export const videoUploadParts = mysqlTable("video_upload_parts", {
+  id: int("id").autoincrement().primaryKey(),
+  sessionId: varchar("session_id", { length: 64 }).notNull(),
+  partIndex: int("part_index").notNull(),
+  storageKey: varchar("storage_key", { length: 1024 }).notNull(),
+  sizeBytes: int("size_bytes").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, table => [
+  index("upload_parts_session_index_idx").on(table.sessionId, table.partIndex),
+]);
+
 export const subtitlePresets = mysqlTable("subtitle_presets", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("user_id").notNull(),
@@ -158,6 +184,8 @@ export type VideoProject = typeof videoProjects.$inferSelect;
 export type InsertVideoProject = typeof videoProjects.$inferInsert;
 export type VideoClip = typeof videoClips.$inferSelect;
 export type InsertVideoClip = typeof videoClips.$inferInsert;
+export type InsertVideoUploadSession = typeof videoUploadSessions.$inferInsert;
+export type InsertVideoUploadPart = typeof videoUploadParts.$inferInsert;
 export type SubtitlePreset = typeof subtitlePresets.$inferSelect;
 export type InsertSubtitlePreset = typeof subtitlePresets.$inferInsert;
 export type McpAccessToken = typeof mcpAccessTokens.$inferSelect;
