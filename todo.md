@@ -114,3 +114,4 @@
 - [x] กำหนด remote และส่ง source code Cineflow เวอร์ชันล่าสุดไปยัง GitHub repository ที่ผู้ใช้ระบุ
 - [x] ตรวจ commit และไฟล์บน GitHub หลังเชื่อมต่อเสร็จ
 - [x] ป้องกันไม่ให้ไฟล์ media และข้อมูล runtime จาก browser smoke test ถูกส่งขึ้น GitHub
+- [x] แก้ไขข้อผิดพลาด Unexpected token '<' เมื่อหน้าเว็บได้รับ HTML แทน JSON ระหว่างการอัปโหลดหรือเรียก API
