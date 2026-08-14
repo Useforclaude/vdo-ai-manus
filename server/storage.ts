@@ -1,10 +1,11 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { requireS3Config, runtimeConfig } from "./runtimeConfig";
+import { requireS3Config } from "./runtimeConfig";
+import { getRuntimeProviderConfig, type RuntimeProviderConfig } from "./systemConfig";
 
 function normalizeKey(relKey: string): string {
   const key = relKey.replace(/^\/+/, "").replace(/\\/g, "/");
@@ -19,23 +20,23 @@ function appendHashSuffix(relKey: string): string {
   return `${relKey.slice(0, lastDot)}_${hash}${relKey.slice(lastDot)}`;
 }
 
-function isS3(): boolean {
-  return runtimeConfig.storage.driver === "s3";
+function isS3(storage: RuntimeProviderConfig["storage"]): boolean {
+  return storage.driver === "s3";
 }
 
-function localPathFor(key: string): string {
-  const root = runtimeConfig.storage.localPath;
+function localPathFor(key: string, storage: RuntimeProviderConfig["storage"]): string {
+  const root = storage.localPath;
   const target = path.resolve(root, normalizeKey(key));
   if (!target.startsWith(`${root}${path.sep}`)) throw new Error("Invalid storage key");
   return target;
 }
 
-function createS3Client(): S3Client {
-  const { accessKeyId, secretAccessKey } = requireS3Config();
+function createS3Client(storage: RuntimeProviderConfig["storage"]): S3Client {
+  const { accessKeyId, secretAccessKey } = requireS3Config(storage);
   return new S3Client({
-    region: runtimeConfig.storage.region,
-    endpoint: runtimeConfig.storage.endpoint,
-    forcePathStyle: runtimeConfig.storage.forcePathStyle,
+    region: storage.region,
+    endpoint: storage.endpoint,
+    forcePathStyle: storage.forcePathStyle,
     credentials: { accessKeyId, secretAccessKey },
   });
 }
@@ -50,16 +51,17 @@ export async function storagePut(
   contentType = "application/octet-stream",
 ): Promise<{ key: string; url: string }> {
   const key = appendHashSuffix(normalizeKey(relKey));
-  if (isS3()) {
-    const { bucket } = requireS3Config();
-    await createS3Client().send(new PutObjectCommand({
+  const { storage } = await getRuntimeProviderConfig();
+  if (isS3(storage)) {
+    const { bucket } = requireS3Config(storage);
+    await createS3Client(storage).send(new PutObjectCommand({
       Bucket: bucket,
       Key: key,
       Body: data,
       ContentType: contentType,
     }));
   } else {
-    const target = localPathFor(key);
+    const target = localPathFor(key, storage);
     await fs.mkdir(path.dirname(target), { recursive: true });
     await fs.writeFile(target, data);
   }
@@ -73,7 +75,24 @@ export async function storageGet(relKey: string): Promise<{ key: string; url: st
 
 export async function storageGetSignedUrl(relKey: string): Promise<string> {
   const key = normalizeKey(relKey);
-  if (!isS3()) return pathToFileURL(localPathFor(key)).toString();
-  const { bucket } = requireS3Config();
-  return getSignedUrl(createS3Client(), new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 60 * 15 });
+  const { storage } = await getRuntimeProviderConfig();
+  if (!isS3(storage)) return pathToFileURL(localPathFor(key, storage)).toString();
+  const { bucket } = requireS3Config(storage);
+  return getSignedUrl(createS3Client(storage), new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: 60 * 15 });
+}
+
+export async function checkStorageHealth(): Promise<{ ok: boolean; detail: string }> {
+  try {
+    const { storage } = await getRuntimeProviderConfig();
+    if (!isS3(storage)) {
+      await fs.mkdir(storage.localPath, { recursive: true });
+      await fs.access(storage.localPath);
+      return { ok: true, detail: `Local storage ready: ${storage.localPath}` };
+    }
+    const { bucket } = requireS3Config(storage);
+    await createS3Client(storage).send(new HeadBucketCommand({ Bucket: bucket }));
+    return { ok: true, detail: `S3 bucket reachable: ${bucket}` };
+  } catch (error) {
+    return { ok: false, detail: error instanceof Error ? error.message : "Storage health check failed" };
+  }
 }

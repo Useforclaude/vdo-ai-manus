@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react";
 import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "wouter";
 import { SUBTITLE_PRESETS, type SubtitlePresetId } from "@shared/subtitles";
 import { extractWaveformPeaks, type WaveformPeaks } from "@/lib/waveform";
 import { buildProjectPreset, parseProjectPreset } from "@/lib/projectPreset";
@@ -759,7 +760,7 @@ export default function Home() {
       <header className="border-b border-[#e7e4de] bg-[#fbfaf8]/90 backdrop-blur-xl">
         <div className="mx-auto flex h-[76px] max-w-[1440px] items-center justify-between px-5 lg:px-10">
           <div className="flex items-center gap-3"><div className="grid size-10 place-items-center rounded-xl bg-[#152b27] text-[#c5f165] shadow-[0_8px_22px_rgba(21,43,39,.18)]"><Film size={19} strokeWidth={1.8} /></div><div><p className="font-display text-[17px] font-semibold tracking-[-0.04em]">Cineflow</p><p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-[#77827f]">AI VIDEO STUDIO</p></div></div>
-          <div className="hidden items-center gap-8 text-[13px] font-medium text-[#66716d] md:flex"><span className="text-[#18211f]">Editor</span><button onClick={() => setIsProjectLibraryOpen(true)} className="transition hover:text-[#18211f]">Clip library</button><span>Help</span></div>
+          <div className="hidden items-center gap-6 text-[13px] font-medium text-[#66716d] md:flex"><span className="text-[#18211f]">Editor</span><button onClick={() => setIsProjectLibraryOpen(true)} className="transition hover:text-[#18211f]">Clip library</button><Link href="/system" className="transition hover:text-[#18211f]">System</Link><Link href="/settings" className="transition hover:text-[#18211f]">Settings</Link></div>
           <div className="flex items-center gap-2 rounded-full border border-[#dfe5d9] bg-[#f3f8e8] px-3 py-2 text-[11px] font-semibold text-[#496935]"><span className="size-1.5 rounded-full bg-[#91bf3b]" /> Ready to edit</div>
         </div>
       </header>

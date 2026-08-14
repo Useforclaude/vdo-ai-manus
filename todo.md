@@ -91,3 +91,8 @@
 - [x] เพิ่ม Dockerfile, Docker Compose และตัวอย่าง environment สำหรับ self-hosted deployment
 - [x] จัดทำคู่มือย้ายข้อมูลและโฮสต์ Cineflow ด้วยฐานข้อมูล, object storage และ AI provider ที่ผู้ใช้ควบคุมเอง
 - [x] เพิ่มและรันทดสอบ regression สำหรับ portable runtime รวมถึงตรวจ TypeScript, Vitest และ browser workflow
+- [x] ออกแบบการปกป้องและการเข้ารหัสค่า AI provider กับ S3 storage ที่บันทึกจากหน้าเว็บ
+- [x] เพิ่ม schema, migration และ API สำหรับตั้งค่า provider แบบเข้ารหัสและตรวจสถานะ MySQL, object storage และ AI
+- [x] สร้างหน้า Settings สำหรับ AI provider และ S3-compatible storage โดยไม่แสดง secret ที่บันทึกแล้ว
+- [x] สร้าง System Dashboard พร้อมสถานะสด การแจ้งเตือน และรายละเอียดปัญหาของ MySQL, MinIO/S3 และ AI provider
+- [x] เพิ่ม Vitest และ browser workflow สำหรับการบันทึก config ที่ปลอดภัยและการแสดง health status

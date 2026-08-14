@@ -1,6 +1,7 @@
 import { promises as fs } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { getOpenAiCompatibleUrl, runtimeConfig } from "../runtimeConfig";
+import { getOpenAiCompatibleUrl } from "../runtimeConfig";
+import { getRuntimeProviderConfig } from "../systemConfig";
 
 export type WhisperSegment = { id: number; start: number; end: number; text: string; [key: string]: unknown };
 export type WhisperResponse = { task?: "transcribe"; language?: string; duration?: number; text: string; segments: WhisperSegment[] };
@@ -21,20 +22,21 @@ async function readAudio(url: string): Promise<{ data: Buffer; mimeType: string 
 
 export async function transcribeAudio(options: TranscribeOptions): Promise<TranscriptionResponse | TranscriptionError> {
   try {
-    if (!runtimeConfig.transcription.baseUrl) {
+    const { ai } = await getRuntimeProviderConfig();
+    if (!ai.transcriptionBaseUrl) {
       return { error: "Voice transcription is not configured", code: "SERVICE_ERROR", details: "Set CINEFLOW_TRANSCRIPTION_BASE_URL to an OpenAI-compatible transcription endpoint." };
     }
     const { data, mimeType } = await readAudio(options.audioUrl);
     if (data.length > 16 * 1024 * 1024) return { error: "Audio file exceeds maximum size limit", code: "FILE_TOO_LARGE" };
     const formData = new FormData();
     formData.append("file", new Blob([new Uint8Array(data)], { type: mimeType }), `audio.${extensionFor(mimeType)}`);
-    formData.append("model", runtimeConfig.transcription.model);
+    formData.append("model", ai.transcriptionModel);
     formData.append("response_format", "verbose_json");
     if (options.language) formData.append("language", options.language);
     if (options.prompt) formData.append("prompt", options.prompt);
-    const response = await fetch(getOpenAiCompatibleUrl(runtimeConfig.transcription.baseUrl, "audio/transcriptions"), {
+    const response = await fetch(getOpenAiCompatibleUrl(ai.transcriptionBaseUrl, "audio/transcriptions"), {
       method: "POST",
-      headers: runtimeConfig.transcription.apiKey ? { Authorization: `Bearer ${runtimeConfig.transcription.apiKey}` } : {},
+      headers: ai.transcriptionApiKey ? { Authorization: `Bearer ${ai.transcriptionApiKey}` } : {},
       body: formData,
     });
     if (!response.ok) return { error: "Transcription service request failed", code: "TRANSCRIPTION_FAILED", details: `${response.status} ${await response.text().catch(() => response.statusText)}` };

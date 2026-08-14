@@ -50,6 +50,13 @@
       "when": 1786631451599,
       "tag": "0006_chief_tarot",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1786677869648,
+      "tag": "0007_bright_spiral",
+      "breakpoints": true
     }
   ]
 }

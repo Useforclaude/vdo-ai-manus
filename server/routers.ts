@@ -6,6 +6,15 @@ import { createJobId, interpretVideoCommand, previewClipSilences } from "./video
 import { resolveVideoActor } from "./videoActor";
 import { subtitleStyleForPreset } from "@shared/subtitles";
 import { createAiProducerDraft, listAiProducerModels } from "./aiProducer";
+import {
+  getPublicProviderConfiguration,
+  getRuntimeProviderConfig,
+  isAdminSession,
+  lockAdminSession,
+  saveProviderConfiguration,
+  unlockAdminSession,
+} from "./systemConfig";
+import { getSystemHealth } from "./systemHealth";
 
 const subtitleStyleInput = z.object({
   font: z.enum(["Noto Sans Thai", "Arial", "Inter"]).default("Noto Sans Thai"),
@@ -16,13 +25,65 @@ const subtitlePresetInput = z.enum(["thai_standard", "thai_story", "thai_minimal
 const customSubtitlePresetInput = subtitleStyleInput.extend({
   name: z.string().trim().min(1).max(80),
 });
+const providerConfigurationInput = z.object({
+  ai: z.object({
+    llmBaseUrl: z.string().url().optional(),
+    llmApiKey: z.string().min(1).max(600).optional(),
+    llmDefaultModel: z.string().trim().min(1).max(160).optional(),
+    transcriptionBaseUrl: z.string().url().optional(),
+    transcriptionApiKey: z.string().min(1).max(600).optional(),
+    transcriptionModel: z.string().trim().min(1).max(160).optional(),
+  }),
+  storage: z.object({
+    driver: z.enum(["local", "s3"]),
+    localPath: z.string().trim().min(1).max(500).optional(),
+    bucket: z.string().trim().min(3).max(255).optional(),
+    region: z.string().trim().min(1).max(120).optional(),
+    endpoint: z.string().url().optional(),
+    accessKeyId: z.string().trim().min(1).max(300).optional(),
+    secretAccessKey: z.string().min(1).max(600).optional(),
+    forcePathStyle: z.boolean().optional(),
+  }),
+});
 
+function requireAdmin(ctx: { req: Parameters<typeof isAdminSession>[0] }) {
+  if (!isAdminSession(ctx.req)) throw new Error("Admin access is required");
+}
 export const appRouter = router({
   auth: router({
     me: publicProcedure.query(opts => opts.ctx.user),
     logout: publicProcedure.mutation(({ ctx }) => {
       ctx.res.clearCookie(GUEST_COOKIE_NAME, { httpOnly: true, sameSite: "lax", path: "/", maxAge: -1 });
       return { success: true } as const;
+    }),
+  }),
+  system: router({
+    access: publicProcedure.query(({ ctx }) => ({ authorized: isAdminSession(ctx.req) })),
+    unlock: publicProcedure.input(z.object({ token: z.string().min(1).max(512) })).mutation(({ ctx, input }) => {
+      if (!unlockAdminSession(ctx.req, ctx.res, input.token)) throw new Error("Invalid administrator access token");
+      return { success: true } as const;
+    }),
+    lock: publicProcedure.mutation(({ ctx }) => {
+      lockAdminSession(ctx.req, ctx.res);
+      return { success: true } as const;
+    }),
+    providerConfiguration: publicProcedure.query(async ({ ctx }) => {
+      requireAdmin(ctx);
+      return getPublicProviderConfiguration();
+    }),
+    saveProviderConfiguration: publicProcedure.input(providerConfigurationInput).mutation(async ({ ctx, input }) => {
+      requireAdmin(ctx);
+      await saveProviderConfiguration(input);
+      return getPublicProviderConfiguration();
+    }),
+    health: publicProcedure.query(async ({ ctx }) => {
+      requireAdmin(ctx);
+      return getSystemHealth();
+    }),
+    runtimeSummary: publicProcedure.query(async ({ ctx }) => {
+      requireAdmin(ctx);
+      const config = await getRuntimeProviderConfig();
+      return { storageDriver: config.storage.driver, llmConfigured: Boolean(config.ai.llmBaseUrl) };
     }),
   }),
   video: router({

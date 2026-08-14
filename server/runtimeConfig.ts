@@ -40,8 +40,14 @@ export const runtimeConfig = {
   },
 } as const;
 
-export function requireS3Config() {
-  const { bucket, accessKeyId, secretAccessKey } = runtimeConfig.storage;
+type S3Configuration = {
+  bucket?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+};
+
+export function requireS3Config(storage: S3Configuration = runtimeConfig.storage) {
+  const { bucket, accessKeyId, secretAccessKey } = storage;
   if (!bucket || !accessKeyId || !secretAccessKey) {
     throw new Error("S3 storage is not configured. Set S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY.");
   }

@@ -117,6 +117,16 @@ export const editJobs = mysqlTable("edit_jobs", {
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
 
+/**
+ * Encrypted application-wide configuration. Values are encrypted by the server
+ * before insertion; the browser only ever receives a masked configuration view.
+ */
+export const systemSettings = mysqlTable("system_settings", {
+  key: varchar("key", { length: 80 }).primaryKey(),
+  encryptedValue: text("encrypted_value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+});
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type VideoProject = typeof videoProjects.$inferSelect;
@@ -127,5 +137,6 @@ export type SubtitlePreset = typeof subtitlePresets.$inferSelect;
 export type InsertSubtitlePreset = typeof subtitlePresets.$inferInsert;
 export type McpAccessToken = typeof mcpAccessTokens.$inferSelect;
 export type McpAuditLog = typeof mcpAuditLogs.$inferSelect;
+export type SystemSetting = typeof systemSettings.$inferSelect;
 export type EditJob = typeof editJobs.$inferSelect;
 export type InsertEditJob = typeof editJobs.$inferInsert;

@@ -14,6 +14,7 @@ import {
   videoProjects,
   mcpAccessTokens,
   mcpAuditLogs,
+  systemSettings,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -33,6 +34,25 @@ export async function getDb() {
 function requireDb(db: Awaited<ReturnType<typeof getDb>>) {
   if (!db) throw new Error("Database is unavailable");
   return db;
+}
+
+export async function getSystemSetting(key: string) {
+  const db = requireDb(await getDb());
+  const rows = await db.select().from(systemSettings).where(eq(systemSettings.key, key)).limit(1);
+  return rows[0];
+}
+
+export async function upsertSystemSetting(key: string, encryptedValue: string) {
+  const db = requireDb(await getDb());
+  await db.insert(systemSettings).values({ key, encryptedValue }).onDuplicateKeyUpdate({
+    set: { encryptedValue },
+  });
+  return getSystemSetting(key);
+}
+
+export async function pingDatabase(): Promise<void> {
+  const db = requireDb(await getDb());
+  await db.execute("SELECT 1");
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {
