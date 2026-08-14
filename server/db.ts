@@ -15,6 +15,8 @@ import {
   mcpAccessTokens,
   mcpAuditLogs,
   systemSettings,
+  systemAlerts,
+  systemHealthChecks,
 } from "../drizzle/schema";
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -53,6 +55,60 @@ export async function upsertSystemSetting(key: string, encryptedValue: string) {
 export async function pingDatabase(): Promise<void> {
   const db = requireDb(await getDb());
   await db.execute("SELECT 1");
+}
+
+type RecordedHealth = {
+  id: "mysql" | "storage" | "ai";
+  label: string;
+  status: "healthy" | "degraded" | "unconfigured";
+  detail: string;
+  checkedAt: Date;
+};
+
+export async function recordSystemHealthChecks(results: RecordedHealth[]): Promise<void> {
+  const db = requireDb(await getDb());
+  await db.transaction(async tx => {
+    for (const result of results) {
+      const detail = result.detail.slice(0, 1000);
+      await tx.insert(systemHealthChecks).values({
+        service: result.id,
+        status: result.status,
+        detail,
+        checkedAt: result.checkedAt,
+      });
+      const active = await tx.select().from(systemAlerts).where(and(
+        eq(systemAlerts.service, result.id),
+        eq(systemAlerts.state, "open"),
+      )).orderBy(desc(systemAlerts.lastDetectedAt)).limit(1);
+      if (result.status === "degraded") {
+        const summary = `${result.label} connection degraded`;
+        if (active[0]) {
+          await tx.update(systemAlerts).set({ summary, detail, lastDetectedAt: result.checkedAt }).where(eq(systemAlerts.id, active[0].id));
+        } else {
+          await tx.insert(systemAlerts).values({
+            service: result.id,
+            state: "open",
+            summary,
+            detail,
+            firstDetectedAt: result.checkedAt,
+            lastDetectedAt: result.checkedAt,
+          });
+        }
+      } else if (active[0]) {
+        await tx.update(systemAlerts).set({ state: "resolved", resolvedAt: result.checkedAt }).where(eq(systemAlerts.id, active[0].id));
+      }
+    }
+  });
+}
+
+export async function listRecentSystemHealthChecks(limit = 36) {
+  const db = requireDb(await getDb());
+  return db.select().from(systemHealthChecks).orderBy(desc(systemHealthChecks.checkedAt)).limit(Math.max(1, Math.min(limit, 180)));
+}
+
+export async function listSystemAlerts(limit = 30) {
+  const db = requireDb(await getDb());
+  return db.select().from(systemAlerts).orderBy(desc(systemAlerts.lastDetectedAt)).limit(Math.max(1, Math.min(limit, 100)));
 }
 
 export async function upsertUser(user: InsertUser): Promise<void> {

@@ -104,3 +104,13 @@
 - [x] รัน browser smoke test สำหรับ Editor, MCP และ System Console เพื่อทำซ้ำปัญหาที่พบ
 - [x] แก้ไข bug ที่ยืนยันได้ พร้อมเพิ่ม regression test ที่เหมาะสม
 - [x] ยืนยัน TypeScript, Vitest และ browser workflow หลังแก้ไข bug แล้วบันทึกเวอร์ชันที่เสถียร
+- [x] ออกแบบการเชื่อม AI provider จริงผ่าน Settings พร้อมรักษา credential ในรูปแบบเข้ารหัส
+- [x] เพิ่ม schema และ API สำหรับบันทึกประวัติ health checks และเหตุการณ์ service degradation
+- [x] เพิ่มกลไกตรวจจับความผิดปกติและสร้าง alert สำหรับ MySQL, MinIO/S3 และ AI provider
+- [x] เพิ่มหน้า System Dashboard สำหรับดู health history และ alert history พร้อมสถานะที่แก้ไขแล้ว
+- [x] เพิ่ม UI ช่วยตรวจ AI provider configuration และทดสอบการเชื่อมต่อผ่าน Settings
+- [x] เพิ่ม regression tests และ browser workflow สำหรับ health history, alerts และ provider connection test
+- [x] ตรวจสิทธิ์ GitHub และสถานะ repository Useforclaude/vdo-ai-manus ก่อนเชื่อมโค้ด
+- [ ] กำหนด remote และส่ง source code Cineflow เวอร์ชันล่าสุดไปยัง GitHub repository ที่ผู้ใช้ระบุ
+- [ ] ตรวจ commit และไฟล์บน GitHub หลังเชื่อมต่อเสร็จ
+- [x] ป้องกันไม่ให้ไฟล์ media และข้อมูล runtime จาก browser smoke test ถูกส่งขึ้น GitHub

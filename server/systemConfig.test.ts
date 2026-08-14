@@ -5,6 +5,7 @@ const mockDb = {
   getSystemSetting: vi.fn(async (key: string) => settings.has(key) ? { encryptedValue: settings.get(key)! } : undefined),
   upsertSystemSetting: vi.fn(async (key: string, value: string) => { settings.set(key, value); }),
   pingDatabase: vi.fn(async () => undefined),
+  recordSystemHealthChecks: vi.fn(async () => undefined),
 };
 
 vi.mock("./db", () => mockDb);
@@ -70,6 +71,7 @@ describe("self-hosted system configuration", () => {
     const health = await getSystemHealth();
 
     expect(health.map(item => item.status)).toEqual(["healthy", "healthy", "healthy"]);
+    expect(mockDb.recordSystemHealthChecks).toHaveBeenCalledOnce();
     expect(JSON.stringify(health)).not.toContain("test-secret-9999");
     vi.unstubAllGlobals();
   });

@@ -127,6 +127,31 @@ export const systemSettings = mysqlTable("system_settings", {
   updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
 });
 
+/** Recent, secret-free observations used by the System Dashboard health timeline. */
+export const systemHealthChecks = mysqlTable("system_health_checks", {
+  id: int("id").autoincrement().primaryKey(),
+  service: mysqlEnum("service", ["mysql", "storage", "ai"]).notNull(),
+  status: mysqlEnum("status", ["healthy", "degraded", "unconfigured"]).notNull(),
+  detail: varchar("detail", { length: 1000 }).notNull(),
+  checkedAt: timestamp("checked_at").defaultNow().notNull(),
+}, table => [
+  index("system_health_service_checked_idx").on(table.service, table.checkedAt),
+]);
+
+/** A service incident opens only on degradation and closes after a healthy follow-up check. */
+export const systemAlerts = mysqlTable("system_alerts", {
+  id: int("id").autoincrement().primaryKey(),
+  service: mysqlEnum("service", ["mysql", "storage", "ai"]).notNull(),
+  state: mysqlEnum("state", ["open", "resolved"]).notNull().default("open"),
+  summary: varchar("summary", { length: 240 }).notNull(),
+  detail: varchar("detail", { length: 1000 }).notNull(),
+  firstDetectedAt: timestamp("first_detected_at").defaultNow().notNull(),
+  lastDetectedAt: timestamp("last_detected_at").defaultNow().notNull(),
+  resolvedAt: timestamp("resolved_at"),
+}, table => [
+  index("system_alerts_service_state_idx").on(table.service, table.state, table.lastDetectedAt),
+]);
+
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 export type VideoProject = typeof videoProjects.$inferSelect;
@@ -138,5 +163,7 @@ export type InsertSubtitlePreset = typeof subtitlePresets.$inferInsert;
 export type McpAccessToken = typeof mcpAccessTokens.$inferSelect;
 export type McpAuditLog = typeof mcpAuditLogs.$inferSelect;
 export type SystemSetting = typeof systemSettings.$inferSelect;
+export type SystemHealthCheck = typeof systemHealthChecks.$inferSelect;
+export type SystemAlert = typeof systemAlerts.$inferSelect;
 export type EditJob = typeof editJobs.$inferSelect;
 export type InsertEditJob = typeof editJobs.$inferInsert;

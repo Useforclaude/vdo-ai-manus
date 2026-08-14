@@ -2,13 +2,200 @@ import { SystemAdminShell } from "@/components/SystemAdminShell";
 import { Button } from "@/components/ui/button";
 import { shouldEnableAdminQuery } from "@/lib/systemAdmin";
 import { trpc } from "@/lib/trpc";
-import { Activity, AlertTriangle, CheckCircle2, CircleAlert, Database, HardDrive, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  CircleAlert,
+  Database,
+  HardDrive,
+  Loader2,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react";
 
 const icons = { mysql: Database, storage: HardDrive, ai: Sparkles };
 
 export default function SystemDashboard() {
   const access = trpc.system.access.useQuery();
-  const health = trpc.system.health.useQuery(undefined, { enabled: shouldEnableAdminQuery(access.data?.authorized), refetchInterval: 30_000, retry: false });
+  const enabled = shouldEnableAdminQuery(access.data?.authorized);
+  const health = trpc.system.health.useQuery(undefined, {
+    enabled,
+    refetchInterval: 30_000,
+    retry: false,
+  });
+  const history = trpc.system.healthHistory.useQuery(
+    { limit: 18 },
+    { enabled, refetchInterval: 30_000, retry: false },
+  );
+  const alerts = trpc.system.alerts.useQuery(
+    { limit: 12 },
+    { enabled, refetchInterval: 30_000, retry: false },
+  );
+
   const problemCount = health.data?.filter(item => item.status !== "healthy").length ?? 0;
-  return <SystemAdminShell><section className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between"><div><p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[.16em] text-[#53766a] dark:text-[#a7cba6]"><span className="size-1.5 rounded-full bg-[#a5d83d]" /> Live infrastructure</p><h1 className="font-display text-3xl font-semibold tracking-[-.055em] sm:text-[40px]">System <span className="text-[#789c55] dark:text-[#b7e56d]">dashboard.</span></h1><p className="mt-2 max-w-xl text-sm leading-6 text-[#67726e] dark:text-[#afbbb5]">ตรวจการเชื่อมต่อสำคัญของ Cineflow ทุก 30 วินาที พร้อมรายละเอียดที่ใช้แก้ปัญหาได้ โดยไม่แสดง credentials</p></div><Button variant="outline" onClick={() => void health.refetch()} disabled={health.isFetching} className="border-[#ceddc4] bg-white text-[#486643] hover:bg-[#edf5e5] dark:border-[#3b4d44] dark:bg-[#1d2c26] dark:text-[#d2efb3] dark:hover:bg-[#2b4135]">{health.isFetching ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh now</Button></section>{problemCount > 0 && <section className="mt-6 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100"><CircleAlert className="mt-0.5 shrink-0" size={18} /><div><p className="text-sm font-bold">ต้องตรวจสอบ {problemCount} บริการ</p><p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">การแจ้งเตือนนี้จะแสดงจนกว่าการตรวจครั้งถัดไปจะสำเร็จ ดูรายละเอียดของแต่ละบริการด้านล่าง</p></div></section>}{health.isLoading ? <div className="mt-7 grid min-h-48 place-items-center rounded-3xl border border-[#dce5d5] bg-white dark:border-[#35463e] dark:bg-[#1b2923]"><Loader2 className="animate-spin text-[#6c963f] dark:text-[#b5e765]" /></div> : <section className="mt-7 grid gap-4 md:grid-cols-3">{health.data?.map(item => { const Icon = icons[item.id]; const healthy = item.status === "healthy"; return <article key={item.id} className="rounded-[24px] border border-[#dce5d5] bg-white p-5 shadow-[0_12px_36px_rgba(31,43,37,.04)] dark:border-[#35463e] dark:bg-[#1b2923] dark:shadow-black/10"><div className="flex items-start justify-between gap-3"><div className={`grid size-10 place-items-center rounded-xl ${healthy ? "bg-[#edf6de] text-[#5f8c35] dark:bg-[#294333] dark:text-[#b5e765]" : item.status === "unconfigured" ? "bg-stone-100 text-stone-600 dark:bg-[#303a35] dark:text-[#c4cbc7]" : "bg-rose-50 text-rose-700 dark:bg-rose-950/45 dark:text-rose-200"}`}><Icon size={19} /></div><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${healthy ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-200" : item.status === "unconfigured" ? "bg-stone-100 text-stone-600 dark:bg-[#303a35] dark:text-[#c4cbc7]" : "bg-rose-50 text-rose-700 dark:bg-rose-950/45 dark:text-rose-200"}`}>{item.status}</span></div><h2 className="mt-5 font-display text-lg font-semibold">{item.label}</h2><p className="mt-2 min-h-10 text-xs leading-5 text-[#68766f] dark:text-[#acb9b1]">{item.detail}</p><div className="mt-5 flex items-center gap-1.5 border-t border-[#edf0ea] pt-3 text-[10px] text-[#859089] dark:border-[#314139] dark:text-[#8fa096]">{healthy ? <CheckCircle2 size={12} className="text-emerald-600 dark:text-emerald-400" /> : <AlertTriangle size={12} className="text-amber-600 dark:text-amber-400" />} Checked {new Date(item.checkedAt).toLocaleTimeString()}</div></article>; })}</section>}<section className="mt-5 rounded-[24px] border border-[#dce5d5] bg-[#1b2421] p-5 text-white dark:border-[#3b5044] dark:bg-[#22352c]"><div className="flex items-start gap-3"><div className="grid size-9 place-items-center rounded-xl bg-[#2c3c36] text-[#c5f165] dark:bg-[#3a5545] dark:text-[#d4f878]"><Activity size={17} /></div><div><p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#c4d0c8]">Operational guidance</p><p className="mt-1 text-sm leading-6 text-[#e7eee8]">หากสถานะเป็น degraded ให้ตรวจ endpoint, key และ network ของ provider ใน Settings; งานใหม่จะใช้ configuration ที่บันทึกไว้ทันทีโดยไม่ต้อง restart container.</p></div></div></section></SystemAdminShell>;
+  const openAlerts = alerts.data?.filter(alert => alert.state === "open") ?? [];
+
+  const refreshAll = () => {
+    void health.refetch();
+    void history.refetch();
+    void alerts.refetch();
+  };
+
+  return (
+    <SystemAdminShell>
+      <section className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="mb-2 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[.16em] text-[#53766a] dark:text-[#a7cba6]">
+            <span className="size-1.5 rounded-full bg-[#a5d83d]" /> Live infrastructure
+          </p>
+          <h1 className="font-display text-3xl font-semibold tracking-[-.055em] sm:text-[40px]">
+            System <span className="text-[#789c55] dark:text-[#b7e56d]">dashboard.</span>
+          </h1>
+          <p className="mt-2 max-w-xl text-sm leading-6 text-[#67726e] dark:text-[#afbbb5]">
+            ตรวจการเชื่อมต่อสำคัญของ Cineflow ทุก 30 วินาที พร้อมประวัติและ alerts ที่ไม่มี credentials
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          onClick={refreshAll}
+          disabled={health.isFetching}
+          className="border-[#ceddc4] bg-white text-[#486643] hover:bg-[#edf5e5] dark:border-[#3b4d44] dark:bg-[#1d2c26] dark:text-[#d2efb3] dark:hover:bg-[#2b4135]"
+        >
+          {health.isFetching ? <Loader2 className="animate-spin" /> : <RefreshCw />} Refresh now
+        </Button>
+      </section>
+
+      {problemCount > 0 && (
+        <section className="mt-6 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
+          <CircleAlert className="mt-0.5 shrink-0" size={18} />
+          <div>
+            <p className="text-sm font-bold">ต้องตรวจสอบ {problemCount} บริการ</p>
+            <p className="mt-1 text-xs leading-5 text-amber-800 dark:text-amber-200">
+              สร้าง alert อัตโนมัติสำหรับความผิดปกติ และจะปิดเหตุการณ์หลังการตรวจครั้งถัดไปสำเร็จ
+            </p>
+          </div>
+        </section>
+      )}
+
+      {health.isLoading ? (
+        <div className="mt-7 grid min-h-48 place-items-center rounded-3xl border border-[#dce5d5] bg-white dark:border-[#35463e] dark:bg-[#1b2923]">
+          <Loader2 className="animate-spin text-[#6c963f] dark:text-[#b5e765]" />
+        </div>
+      ) : (
+        <>
+          <section className="mt-7 grid gap-4 md:grid-cols-3">
+            {health.data?.map(item => {
+              const Icon = icons[item.id];
+              const healthy = item.status === "healthy";
+              const statusClass = healthy
+                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950/45 dark:text-emerald-200"
+                : item.status === "unconfigured"
+                  ? "bg-stone-100 text-stone-600 dark:bg-[#303a35] dark:text-[#c4cbc7]"
+                  : "bg-rose-50 text-rose-700 dark:bg-rose-950/45 dark:text-rose-200";
+              const iconClass = healthy
+                ? "bg-[#edf6de] text-[#5f8c35] dark:bg-[#294333] dark:text-[#b5e765]"
+                : item.status === "unconfigured"
+                  ? "bg-stone-100 text-stone-600 dark:bg-[#303a35] dark:text-[#c4cbc7]"
+                  : "bg-rose-50 text-rose-700 dark:bg-rose-950/45 dark:text-rose-200";
+
+              return (
+                <article
+                  key={item.id}
+                  className="rounded-[24px] border border-[#dce5d5] bg-white p-5 shadow-[0_12px_36px_rgba(31,43,37,.04)] dark:border-[#35463e] dark:bg-[#1b2923] dark:shadow-black/10"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className={`grid size-10 place-items-center rounded-xl ${iconClass}`}>
+                      <Icon size={19} />
+                    </div>
+                    <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${statusClass}`}>
+                      {item.status}
+                    </span>
+                  </div>
+                  <h2 className="mt-5 font-display text-lg font-semibold">{item.label}</h2>
+                  <p className="mt-2 min-h-10 text-xs leading-5 text-[#68766f] dark:text-[#acb9b1]">{item.detail}</p>
+                  <div className="mt-5 flex items-center gap-1.5 border-t border-[#edf0ea] pt-3 text-[10px] text-[#859089] dark:border-[#314139] dark:text-[#8fa096]">
+                    {healthy ? (
+                      <CheckCircle2 size={12} className="text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <AlertTriangle size={12} className="text-amber-600 dark:text-amber-400" />
+                    )}
+                    Checked {new Date(item.checkedAt).toLocaleTimeString()}
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+
+          {openAlerts.length > 0 && (
+            <section className="mt-5 rounded-[24px] border border-rose-200 bg-rose-50 p-5 dark:border-rose-800/60 dark:bg-rose-950/30">
+              <div className="flex items-center gap-2 text-rose-800 dark:text-rose-100">
+                <CircleAlert size={16} />
+                <h2 className="font-display text-lg font-semibold">Open alerts</h2>
+              </div>
+              <div className="mt-3 space-y-2">
+                {openAlerts.map(alert => (
+                  <div
+                    key={alert.id}
+                    className="rounded-xl border border-rose-200/70 bg-white/70 px-3 py-2 text-xs text-rose-900 dark:border-rose-800/50 dark:bg-black/10 dark:text-rose-100"
+                  >
+                    <strong>{alert.summary}</strong>
+                    <span className="ml-2 opacity-75">{new Date(alert.lastDetectedAt).toLocaleString()}</span>
+                    <p className="mt-1 opacity-80">{alert.detail}</p>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          <section className="mt-5 grid gap-4 lg:grid-cols-2">
+            <article className="rounded-[24px] border border-[#dce5d5] bg-white p-5 dark:border-[#35463e] dark:bg-[#1b2923]">
+              <h2 className="font-display text-lg font-semibold">Recent health history</h2>
+              <div className="mt-3 space-y-2">
+                {history.data?.slice(0, 9).map(item => (
+                  <div key={item.id} className="flex items-center justify-between gap-3 border-b border-[#edf0ea] pb-2 text-xs last:border-0 dark:border-[#314139]">
+                    <span className="font-semibold uppercase tracking-wide">{item.service}</span>
+                    <span className={item.status === "healthy" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}>
+                      {item.status}
+                    </span>
+                    <span className="ml-auto text-[#718078] dark:text-[#acb9b1]">{new Date(item.checkedAt).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+                {!history.data?.length && <p className="text-xs text-[#718078] dark:text-[#acb9b1]">กด Refresh now เพื่อสร้างรายการแรก</p>}
+              </div>
+            </article>
+            <article className="rounded-[24px] border border-[#dce5d5] bg-white p-5 dark:border-[#35463e] dark:bg-[#1b2923]">
+              <h2 className="font-display text-lg font-semibold">Alert history</h2>
+              <div className="mt-3 space-y-2">
+                {alerts.data?.slice(0, 9).map(alert => (
+                  <div key={alert.id} className="flex items-center justify-between gap-3 border-b border-[#edf0ea] pb-2 text-xs last:border-0 dark:border-[#314139]">
+                    <span className="font-semibold">{alert.service}</span>
+                    <span className={alert.state === "open" ? "text-rose-700 dark:text-rose-300" : "text-emerald-700 dark:text-emerald-300"}>
+                      {alert.state}
+                    </span>
+                    <span className="ml-auto text-[#718078] dark:text-[#acb9b1]">{new Date(alert.lastDetectedAt).toLocaleTimeString()}</span>
+                  </div>
+                ))}
+                {!alerts.data?.length && <p className="text-xs text-[#718078] dark:text-[#acb9b1]">ยังไม่มีเหตุการณ์ที่ต้องแจ้งเตือน</p>}
+              </div>
+            </article>
+          </section>
+        </>
+      )}
+
+      <section className="mt-5 rounded-[24px] border border-[#dce5d5] bg-[#1b2421] p-5 text-white dark:border-[#3b5044] dark:bg-[#22352c]">
+        <div className="flex items-start gap-3">
+          <div className="grid size-9 place-items-center rounded-xl bg-[#2c3c36] text-[#c5f165] dark:bg-[#3a5545] dark:text-[#d4f878]">
+            <Activity size={17} />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[.14em] text-[#c4d0c8]">Operational guidance</p>
+            <p className="mt-1 text-sm leading-6 text-[#e7eee8]">
+              หากสถานะเป็น degraded ให้ตรวจ endpoint, key และ network ของ provider ใน Settings; งานใหม่จะใช้ configuration ที่บันทึกไว้ทันทีโดยไม่ต้อง restart container.
+            </p>
+          </div>
+        </div>
+      </section>
+    </SystemAdminShell>
+  );
 }

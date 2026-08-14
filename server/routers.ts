@@ -14,7 +14,7 @@ import {
   saveProviderConfiguration,
   unlockAdminSession,
 } from "./systemConfig";
-import { getSystemHealth } from "./systemHealth";
+import { getSystemHealth, testAiProviderConnection } from "./systemHealth";
 
 const subtitleStyleInput = z.object({
   font: z.enum(["Noto Sans Thai", "Arial", "Inter"]).default("Noto Sans Thai"),
@@ -79,6 +79,18 @@ export const appRouter = router({
     health: publicProcedure.query(async ({ ctx }) => {
       requireAdmin(ctx);
       return getSystemHealth();
+    }),
+    healthHistory: publicProcedure.input(z.object({ limit: z.number().int().min(1).max(180).optional() }).optional()).query(async ({ ctx, input }) => {
+      requireAdmin(ctx);
+      return db.listRecentSystemHealthChecks(input?.limit);
+    }),
+    alerts: publicProcedure.input(z.object({ limit: z.number().int().min(1).max(100).optional() }).optional()).query(async ({ ctx, input }) => {
+      requireAdmin(ctx);
+      return db.listSystemAlerts(input?.limit);
+    }),
+    testAiProvider: publicProcedure.mutation(async ({ ctx }) => {
+      requireAdmin(ctx);
+      return testAiProviderConnection();
     }),
     runtimeSummary: publicProcedure.query(async ({ ctx }) => {
       requireAdmin(ctx);

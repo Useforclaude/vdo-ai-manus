@@ -53,5 +53,20 @@ async function checkAi(): Promise<ServiceHealth> {
 }
 
 export async function getSystemHealth(): Promise<ServiceHealth[]> {
-  return Promise.all([checkMysql(), checkStorage(), checkAi()]);
+  const results = await Promise.all([checkMysql(), checkStorage(), checkAi()]);
+  // A failed database must never make the live health endpoint fail. In that case
+  // the immediate result still communicates the degraded state to the operator.
+  try {
+    await db.recordSystemHealthChecks(results);
+  } catch (error) {
+    console.warn("[SystemHealth] Unable to persist health history", error);
+  }
+  return results;
+}
+
+export async function testAiProviderConnection(): Promise<ServiceHealth> {
+  const results = await getSystemHealth();
+  const result = results.find(item => item.id === "ai");
+  if (!result) throw new Error("AI provider health result was not returned");
+  return result;
 }
